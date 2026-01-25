@@ -51,6 +51,35 @@ public:
                 FSMStringMap.right.at("Passive")
             )
         );
+
+        if(keyboard)
+        {
+            // 按 1 -> Passive, 2 -> FixStand, 3 -> Velocity
+            static std::vector<std::pair<std::string, std::string>> global_keys = {
+                {"1", "Passive"},
+                {"2", "FixStand"},
+                {"3", "Velocity"}
+            };
+            
+            for(auto& [key, target] : global_keys)
+            {
+                if(FSMStringMap.right.count(target))
+                {
+                    int fsm_id = FSMStringMap.right.at(target);
+                    std::string key_copy = key;  // 创建副本
+                    registered_checks.emplace_back(
+                        std::make_pair(
+                            [key_copy]() -> bool {   // 捕获副本
+                                return keyboard && 
+                                    keyboard->key() == key_copy && 
+                                    keyboard->on_pressed; 
+                            },
+                            fsm_id
+                        )
+                    );
+                }
+            }
+        }
     }
 
     void pre_run()
