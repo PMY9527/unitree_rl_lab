@@ -4,22 +4,26 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg, RslRlPpoActorCriticRecurrentCfg
 
 
 @configclass
 class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    class_name = "OnPolicyRunnerResidual"
     num_steps_per_env = 24
-    # obs_groups = {"policy": ["policy"], "critic": ["critic"]} # velocity_env_cfg.py -> class CriticCfg(ObsGroup) This creates an observation group called "critic"
+    obs_groups = {"policy": ["policy"], "critic": ["policy", "gt_linear_velocity", "motion"]} 
     max_iterations = 50000
     save_interval = 100
     experiment_name = ""  # same as task name
     empirical_normalization = False
-    policy = RslRlPpoActorCriticCfg(
+    policy = RslRlPpoActorCriticRecurrentCfg(
         init_noise_std=1.0,
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
+        rnn_type = "lstm",
+        rnn_hidden_dim = 256,
+        rnn_num_layers = 2,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,

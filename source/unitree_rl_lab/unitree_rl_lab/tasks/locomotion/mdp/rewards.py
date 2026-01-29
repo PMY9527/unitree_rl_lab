@@ -10,6 +10,7 @@ except ImportError:
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
+from isaaclab.utils.math import quat_apply_inverse, yaw_quat
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -223,3 +224,58 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
         )
     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
     return reward
+
+
+def joint_pos_from_cmg_l2(
+    env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Reward tracking of joint positions from CMG reference using exponential kernel."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    ref_motion = env.extras.get("cmg_motion")
+    q_ref = ref_motion[:, :29]  # joint positions from CMG
+    # exp(-0.6 * ||q - q_ref||^2)
+    reward = torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
+    return reward
+
+
+def joint_vel_from_cmg_l2(
+    env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Reward tracking of joint velocities from CMG reference using exponential kernel."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    ref_motion = env.extras.get("cmg_motion")
+    qd_ref = ref_motion[:, 29:]  # joint velocities from CMG
+    # exp(-0.5 * ||qd - qd_ref||^2)
+    reward = torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
+    return reward
+
+def track_lin_vel_xy_yaw_frame_exp(
+    env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Reward tracking of linear velocity commands (xy axes) in the gravity aligned
+    robot frame using an exponential kernel.
+    """
+    # extract the used quantities (to enable type-hinting)
+    asset = env.scene[asset_cfg.name]
+    vel_yaw = quat_apply_inverse(yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w[:, :3])
+    lin_vel_error = torch.sum(
+        torch.square(env.command_manager.get_command(command_name)[:, :2] - vel_yaw[:, :2]), 
+        dim=1
+    )
+    return torch.exp(-2.0 * lin_vel_error)
+
+def track_ang_vel_z_world_exp(
+    env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Reward tracking of angular velocity commands (yaw) in world frame using exponential kernel."""
+    # extract the used quantities (to enable type-hinting)
+    asset = env.scene[asset_cfg.name]
+    ang_vel_error = torch.square(
+        env.command_manager.get_command(command_name)[:, 2] - asset.data.root_ang_vel_w[:, 2]
+    )
+    return torch.exp(-ang_vel_error)
+
+def is_terminated(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Return 1.0 for terminated episodes (excluding timeouts)."""
+
+    return (env.termination_manager.terminated & ~env.termination_manager.time_outs).float()
