@@ -17,12 +17,9 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = ""  # same as task name
     empirical_normalization = True
     policy = RslRlPpoActorCriticRecurrentCfg(
-        # init_noise_std=0.1, # 0.1 n
-        # actor_hidden_dims=[256],
-        # critic_hidden_dims=[256], # 256nn
-        init_noise_std=0.2, # 0.1 n
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128], # 256nn
+        init_noise_std=0.1,
+        actor_hidden_dims=[256],
+        critic_hidden_dims=[256],
         activation="elu",
         rnn_type = "lstm",
         rnn_hidden_dim = 256,
