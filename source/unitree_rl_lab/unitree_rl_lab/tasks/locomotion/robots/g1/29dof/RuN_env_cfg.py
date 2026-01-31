@@ -157,12 +157,12 @@ class CommandsCfg:
         heading_command=False,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 3.0),
+            lin_vel_x=(-0.5, 3.0),
             lin_vel_y=(-0.3, 0.3),
             ang_vel_z=(-0.5, 0.5)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 3.5),
+            lin_vel_x=(-0.5, 3.0),
             lin_vel_y=(-0.3, 0.3),
             ang_vel_z=(-0.5, 0.5)
         ),
@@ -187,7 +187,6 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # observation terms (order preserved)
         # O^t
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
@@ -206,6 +205,7 @@ class ObservationsCfg:
     @configclass
     class GtLinVelCfg(ObsGroup):
         """Ground-truth linear velocity observation for critic group."""
+        # v_t
         gt_base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
 
         def __post_init__(self):
@@ -215,6 +215,8 @@ class ObservationsCfg:
     @configclass
     class MotionCfg(ObsGroup):
         """Motion observation for critic group."""
+
+        # M_t
         q_ref = ObsTerm(func=mdp.cmg_q_ref)
         q_vel_ref = ObsTerm(func=mdp.cmg_q_vel_ref)
         def __post_init__(self):
@@ -252,8 +254,8 @@ class RewardsCfg:
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     energy = RewTerm(func=mdp.energy, weight=-1e-5)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
-    action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.04)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.04)
+    action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.06)
     #TODO Feet Force Value?
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5e-8)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
@@ -336,12 +338,12 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
 class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 32
+        self.scene.num_envs = 16
         self.scene.env_spacing = 2.5
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 5
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.5, 3.0),
+            lin_vel_x=(2.5, 3.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0)
         )
