@@ -118,6 +118,10 @@ def main():
     # load previously trained model
     if not hasattr(agent_cfg, "class_name") or agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    elif agent_cfg.class_name == "OnPolicyRunnerResidual":
+        from rsl_rl.runners import OnPolicyRunnerResidual
+        
+        runner = OnPolicyRunnerResidual(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
         from rsl_rl.runners import DistillationRunner
 
@@ -155,18 +159,29 @@ def main():
 
     # reset environment
     obs = env.get_observations()
-    if version("rsl-rl-lib").startswith("2.3."):
-        obs, _ = env.get_observations()
+    # Handle tuple return from IsaacLab wrapper: (policy_tensor, {"observations": obs_dict})
+    if isinstance(obs, tuple):
+        obs_tensor, obs_extras = obs
+        from tensordict import TensorDict
+        obs = TensorDict(obs_extras.get("observations", {"policy": obs_tensor}), batch_size=[env.num_envs])
     timestep = 0
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
+            # Get raw robot data for CMG (avoids observation scaling issues)
+            robot = env.unwrapped.scene["robot"]
+            robot_data = (robot.data.joint_pos, robot.data.joint_vel)
             # agent stepping
-            actions = policy(obs)
+            actions = policy(obs, robot_data=robot_data)
             # env stepping
-            obs, _, _, _ = env.step(actions)
+            obs_tensor, _, _, extras = env.step(actions)
+            # Reconstruct TensorDict from extras
+            if "observations" in extras:
+                obs = TensorDict(extras["observations"], batch_size=[env.num_envs])
+            else:
+                obs = TensorDict({"policy": obs_tensor}, batch_size=[env.num_envs])
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

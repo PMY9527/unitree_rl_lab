@@ -83,8 +83,8 @@ class EventCfg: #TODO
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.3, 1.0),
-            "dynamic_friction_range": (0.3, 1.0),
+            "static_friction_range": (0.6, 1.0),
+            "dynamic_friction_range": (0.4, 0.8),
             "restitution_range": (0.0, 0.0),
             "num_buckets": 64,
         },
@@ -157,10 +157,14 @@ class CommandsCfg:
         heading_command=False,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.5), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-0.1, 0.1)
+            lin_vel_x=(0.0, 3.0),
+            lin_vel_y=(-0.3, 0.3),
+            ang_vel_z=(-0.5, 0.5)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 3.0), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-0.2, 0.2)
+            lin_vel_x=(0.0, 3.5),
+            lin_vel_y=(-0.3, 0.3),
+            ang_vel_z=(-0.5, 0.5)
         ),
     )
 
@@ -169,8 +173,9 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
+    # For residual learning: qref is already absolute joint positions, no scaling needed
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=True
+        asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=False
     )
 
 
@@ -231,10 +236,10 @@ class RewardsCfg:
 
     # Task Rewards.
     track_lin_vel_xy = RewTerm(
-        func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=2.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+        func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=2.0, params={"command_name": "base_velocity"},
     )
     track_ang_vel_z = RewTerm(
-        func=mdp.track_ang_vel_z_world_exp, weight=0.5, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+        func=mdp.track_ang_vel_z_world_exp, weight=0.5, params={"command_name": "base_velocity"}
     )
 
     #Imitation Rewards
@@ -244,18 +249,18 @@ class RewardsCfg:
     # Regularization
     alive = RewTerm(func=mdp.is_alive, weight=1.0)
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     energy = RewTerm(func=mdp.energy, weight=-1e-5)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.04)
-    #TODO Smoothness
-    #TODO Feet Force
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
+    action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.04)
+    #TODO Feet Force Value?
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5e-8)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
     # Joint Deviations
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.2,
+        weight=-0.1,
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -332,4 +337,11 @@ class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 32
-        self.episode_length_s = 1e9
+        self.scene.env_spacing = 2.5
+        self.scene.terrain.terrain_generator.num_rows = 2
+        self.scene.terrain.terrain_generator.num_cols = 5
+        self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
+            lin_vel_x=(0.0, 1.0),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(0.0, 0.0)
+        )

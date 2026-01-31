@@ -232,6 +232,9 @@ def joint_pos_from_cmg_l2(
     """Reward tracking of joint positions from CMG reference using exponential kernel."""
     asset: Articulation = env.scene[asset_cfg.name]
     ref_motion = env.extras.get("cmg_motion")
+    if ref_motion is None:
+        # CMG motion not set (e.g., during play mode) - return zero reward
+        return torch.zeros(env.num_envs, device=env.device)
     q_ref = ref_motion[:, :29]  # joint positions from CMG
     # exp(-0.6 * ||q - q_ref||^2)
     reward = torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
@@ -244,6 +247,9 @@ def joint_vel_from_cmg_l2(
     """Reward tracking of joint velocities from CMG reference using exponential kernel."""
     asset: Articulation = env.scene[asset_cfg.name]
     ref_motion = env.extras.get("cmg_motion")
+    if ref_motion is None:
+        # CMG motion not set (e.g., during play mode) - return zero reward
+        return torch.zeros(env.num_envs, device=env.device)
     qd_ref = ref_motion[:, 29:]  # joint velocities from CMG
     # exp(-0.5 * ||qd - qd_ref||^2)
     reward = torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
@@ -279,3 +285,27 @@ def is_terminated(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return 1.0 for terminated episodes (excluding timeouts)."""
 
     return (env.termination_manager.terminated & ~env.termination_manager.time_outs).float()
+
+
+def action_smoothness_l2(env) -> torch.Tensor:
+    """Penalize action jerk (second derivative) for smoother motion.
+
+    Computes ||a_t - 2*a_{t-1} + a_{t-2}||^2 
+    """
+    a_t = env.action_manager.action
+    a_t1 = env.action_manager.prev_action
+
+    # Track a_{t-2} ourselves using env.extras
+    if "_action_smoothness_prev_prev" not in env.extras:
+        env.extras["_action_smoothness_prev_prev"] = a_t1.clone()
+        return torch.zeros(env.num_envs, device=env.device)
+
+    a_t2 = env.extras["_action_smoothness_prev_prev"]
+
+    # Compute jerk
+    jerk = a_t - 2 * a_t1 + a_t2
+
+    # Update history for next step
+    env.extras["_action_smoothness_prev_prev"] = a_t1.clone()
+
+    return torch.sum(torch.square(jerk), dim=1)
