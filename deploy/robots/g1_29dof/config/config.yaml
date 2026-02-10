@@ -6,7 +6,7 @@ FSM:
       id: 2
     Velocity:
       id: 3
-      type: RLBase
+      type: RLResidual
 
     Mimic_Dance_102: # uncomment to enable
       id: 101
@@ -67,6 +67,7 @@ FSM:
       Mimic_Gangnam_Style: LT(2s) + left.on_pressed
 
     policy_dir: config/policy/velocity
+    cmg_dir: config/policy/velocity/cmg
     # policy_dir: ../../../logs/rsl_rl/unitree_g1_29dof_velocity
   Mimic_Dance_102:
     transitions: 

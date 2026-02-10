@@ -54,8 +54,54 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 
 void State_RLBase::run()
 {
+    static int debug_counter = 0;
+    static int total_calls = 0;
+    bool print_debug = (debug_counter % 100 == 0);  // Print every 100 steps
+
+    total_calls++;
+
     auto action = env->action_manager->processed_actions();
+
+    if (print_debug) {
+        std::cout << "\n[RLBASE DEBUG] ========== Step " << debug_counter << " ==========" << std::endl;
+        std::cout << "[RLBASE] Current joint pos (first 5): [";
+        for (int i = 0; i < std::min(5, (int)env->robot->data.joint_pos.size()); ++i) {
+            std::cout << env->robot->data.joint_pos[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+
+        std::cout << "[RLBASE] Current joint vel (first 5): [";
+        for (int i = 0; i < std::min(5, (int)env->robot->data.joint_vel.size()); ++i) {
+            std::cout << env->robot->data.joint_vel[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+
+        std::cout << "[RLBASE] RL action (first 5): [";
+        for (int i = 0; i < std::min(5, (int)action.size()); ++i) {
+            std::cout << action[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+
+        // Check position delta from current
+        float max_delta = 0.0f;
+        for (int i = 0; i < std::min((int)action.size(), (int)env->robot->data.joint_pos.size()); ++i) {
+            float delta = std::abs(action[i] - env->robot->data.joint_pos[i]);
+            if (delta > max_delta) max_delta = delta;
+        }
+        std::cout << "[RLBASE] Max position delta from current: " << max_delta << " rad" << std::endl;
+    }
+
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
+
+    if (print_debug) {
+        std::cout << "[RLBASE] Final command (first 5): [";
+        for (int i = 0; i < std::min(5, (int)env->robot->data.joint_ids_map.size()); ++i) {
+            std::cout << lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+    }
+
+    debug_counter++;
 }

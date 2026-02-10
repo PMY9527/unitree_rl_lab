@@ -12,7 +12,7 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     class_name = "OnPolicyRunnerResidual"
     num_steps_per_env = 24
     obs_groups = {"policy": ["policy"], "critic": ["policy", "gt_linear_velocity", "motion"]} 
-    max_iterations = 10000
+    max_iterations = 20000
     save_interval = 100
     experiment_name = ""  # same as task name
     empirical_normalization = True

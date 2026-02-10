@@ -30,6 +30,9 @@ protected:
     std::mutex act_mtx_;
 };
 
+// OrtRunner
+// 策略，从env读取观测项，
+// 输出，残差action。
 class OrtRunner : public Algorithms
 {
 public:
@@ -145,14 +148,21 @@ private:
     std::unordered_map<std::string, std::vector<float>> hidden_states;
 };
 
-// CMG Runner: Controlled Motion Generator
-// Input: joint_pos[29] + joint_vel[29] + command[3]
-// Output: motion_ref[58] (reference joint positions + velocities)
+// CMG Runner
+// Input: joint_pos[29] + joint_vel[29] + command[3] （直接从机器人读取，concat后
+// Output: motion_ref[58] (reference joint positions + velocities) (未归一化，绝对值)
 class CMGRunner
 {
 public:
     CMGRunner(const std::string& model_path, const std::string& data_path)
     {
+        // Joint order conversion arrays (USD <-> CMG/SDK)
+        // From on_policy_runner_residual.py lines 53-60
+        joints_usd_to_cmg = {0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10,
+                             16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28};
+        joints_cmg_to_usd = {0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8, 11,
+                             15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28};
+
         // Init ONNX Model
         env = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "cmg_model");
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
@@ -188,6 +198,9 @@ public:
 
         std::cout << "[CMGRunner] Loaded model: " << model_path << std::endl;
         std::cout << "[CMGRunner] motion_dim=" << motion_dim << ", cmd_dim=" << cmd_dim << std::endl;
+        std::cout << "[CMGRunner] Input shapes: motion=[" << input_shapes[0][0] << "," << input_shapes[0][1]
+                  << "], cmd=[" << input_shapes[1][0] << "," << input_shapes[1][1] << "]" << std::endl;
+        std::cout << "[CMGRunner] Output shape: [" << output_shapes[0][0] << "," << output_shapes[0][1] << "]" << std::endl;
     }
 
     void load_stats(const std::string& data_path)
@@ -204,34 +217,117 @@ public:
         cmd_dim = cmd_min.size();         // 3
 
         std::cout << "[CMGRunner] Loaded stats from: " << data_path << std::endl;
+        std::cout << "[CMGRunner] Stats - motion_mean (first 5): [";
+        for (int i = 0; i < std::min(5, (int)motion_mean.size()); ++i) {
+            std::cout << motion_mean[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+        std::cout << "[CMGRunner] Stats - motion_std (first 5): [";
+        for (int i = 0; i < std::min(5, (int)motion_std.size()); ++i) {
+            std::cout << motion_std[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+        std::cout << "[CMGRunner] Stats - cmd_min: [" << cmd_min[0] << ", " << cmd_min[1] << ", " << cmd_min[2] << "]" << std::endl;
+        std::cout << "[CMGRunner] Stats - cmd_max: [" << cmd_max[0] << ", " << cmd_max[1] << ", " << cmd_max[2] << "]" << std::endl;
+    }
+
+    // Convert USD order to CMG/SDK order
+    std::vector<float> usd_to_cmg(const std::vector<float>& pos_usd, const std::vector<float>& vel_usd)
+    {
+        std::vector<float> pos_cmg(29), vel_cmg(29);
+        for (size_t i = 0; i < 29; ++i) {
+            pos_cmg[i] = pos_usd[joints_usd_to_cmg[i]];
+            vel_cmg[i] = vel_usd[joints_usd_to_cmg[i]];
+        }
+        std::vector<float> motion_cmg(58);
+        std::copy(pos_cmg.begin(), pos_cmg.end(), motion_cmg.begin());
+        std::copy(vel_cmg.begin(), vel_cmg.end(), motion_cmg.begin() + 29);
+        return motion_cmg;
+    }
+
+    // Convert CMG/SDK order to USD order
+    std::vector<float> cmg_to_usd(const std::vector<float>& motion_cmg)
+    {
+        std::vector<float> pos_cmg(motion_cmg.begin(), motion_cmg.begin() + 29);
+        std::vector<float> vel_cmg(motion_cmg.begin() + 29, motion_cmg.end());
+        std::vector<float> pos_usd(29), vel_usd(29);
+        for (size_t i = 0; i < 29; ++i) {
+            pos_usd[i] = pos_cmg[joints_cmg_to_usd[i]];
+            vel_usd[i] = vel_cmg[joints_cmg_to_usd[i]];
+        }
+        std::vector<float> motion_usd(58);
+        std::copy(pos_usd.begin(), pos_usd.end(), motion_usd.begin());
+        std::copy(vel_usd.begin(), vel_usd.end(), motion_usd.begin() + 29);
+        return motion_usd;
     }
 
     // Main forward pass
-    // Input: joint_pos[29], joint_vel[29], command[3]
-    // Output: motion_ref[58] = [pos_ref(29), vel_ref(29)]
-    std::vector<float> forward(const std::vector<float>& joint_pos,
-                                const std::vector<float>& joint_vel,
+    // Input: joint_pos_usd[29], joint_vel_usd[29] in USD order, command[3]
+    // Output: motion_ref_usd[58] = [pos_ref(29), vel_ref(29)] in USD order
+    std::vector<float> forward(const std::vector<float>& joint_pos_usd,
+                                const std::vector<float>& joint_vel_usd,
                                 const std::vector<float>& command)
     {
-        // 1. Normalize motion: concat(joint_pos, joint_vel), then normalize
-        size_t pos_size = joint_pos.size();
-        for (size_t i = 0; i < pos_size; ++i) {
-            motion_norm[i] = (joint_pos[i] - motion_mean[i]) / motion_std[i];
+        static int debug_counter = 0;
+        bool print_debug = (debug_counter % 100 == 0); // (debug_counter % 100 == 0 Print every 100 steps
+
+        // Convert USD order to CMG/SDK order
+        auto motion_cmg = usd_to_cmg(joint_pos_usd, joint_vel_usd);
+        std::vector<float> joint_pos_cmg(motion_cmg.begin(), motion_cmg.begin() + 29);
+        std::vector<float> joint_vel_cmg(motion_cmg.begin() + 29, motion_cmg.end());
+
+        if (print_debug) {
+            std::cout << "\n[CMG DEBUG] ========== Step " << debug_counter << " ==========" << std::endl;
+            std::cout << "[CMG INPUT] Command: [" << command[0] << ", " << command[1] << ", " << command[2] << "]" << std::endl;
+            std::cout << "[CMG INPUT USD] Joint pos (first 5): [";
+            for (int i = 0; i < std::min(5, (int)joint_pos_usd.size()); ++i) {
+                std::cout << joint_pos_usd[i] << (i < 4 ? ", " : "");
+            }
+            std::cout << "...]" << std::endl;
+            std::cout << "[CMG INPUT CMG] Joint pos (first 5): [";
+            for (int i = 0; i < std::min(5, (int)joint_pos_cmg.size()); ++i) {
+                std::cout << joint_pos_cmg[i] << (i < 4 ? ", " : "");
+            }
+            std::cout << "...]" << std::endl;
         }
-        for (size_t i = 0; i < joint_vel.size(); ++i) {
-            motion_norm[pos_size + i] = (joint_vel[i] - motion_mean[pos_size + i]) / motion_std[pos_size + i];
+
+        // 1. Clamp input to mean ± 3*std for stability, then normalize
+        size_t pos_size = joint_pos_cmg.size();
+        for (size_t i = 0; i < pos_size; ++i) {
+            float clamped = std::clamp(joint_pos_cmg[i],
+                                       motion_mean[i] - 3.0f * motion_std[i],
+                                       motion_mean[i] + 3.0f * motion_std[i]);
+            motion_norm[i] = (clamped - motion_mean[i]) / motion_std[i];
+        }
+        for (size_t i = 0; i < joint_vel_cmg.size(); ++i) {
+            float clamped = std::clamp(joint_vel_cmg[i],
+                                       motion_mean[pos_size + i] - 3.0f * motion_std[pos_size + i],
+                                       motion_mean[pos_size + i] + 3.0f * motion_std[pos_size + i]);
+            motion_norm[pos_size + i] = (clamped - motion_mean[pos_size + i]) / motion_std[pos_size + i];
         }
 
         // 2. Normalize command: (cmd - min) / (max - min) * 2 - 1 -> [-1, 1]
+        std::vector<float> command_adjusted = command;
+        float cmd_magnitude = std::sqrt(command[0]*command[0] + command[1]*command[1] + command[2]*command[2]);
+
         for (size_t i = 0; i < cmd_dim; ++i) {
             float range = cmd_max[i] - cmd_min[i];
             if (range > 1e-6f) {
                 cmd_norm[i] = (command[i] - cmd_min[i]) / range * 2.0f - 1.0f;
+                // BUG FIX: Removed line that was overwriting cmd_norm[i] with 0.0
             } else {
                 cmd_norm[i] = 0.0f;
             }
         }
 
+        if (print_debug) {
+            std::cout << "[CMG NORM] Normalized cmd: [" << cmd_norm[0] << ", " << cmd_norm[1] << ", " << cmd_norm[2] << "]" << std::endl;
+            std::cout << "[CMG NORM] Motion norm (first 5): [";
+            for (int i = 0; i < std::min(5, (int)motion_norm.size()); ++i) {
+                std::cout << motion_norm[i] << (i < 4 ? ", " : "");
+            }
+            std::cout << "...]" << std::endl;
+        }
         // 3. Run ONNX inference
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
 
@@ -248,13 +344,41 @@ public:
             input_names.data(), input_tensors.data(), input_tensors.size(),
             output_names.data(), output_names.size());
 
-        // 4. Denormalize output: output * std + mean
+        // 4. Denormalize output: output * std + mean (in CMG order)
         auto* output_data = output_tensors[0].GetTensorMutableData<float>();
-        std::lock_guard<std::mutex> lock(mtx_);
+
+        std::vector<float> motion_ref_cmg(motion_dim);
         for (size_t i = 0; i < motion_dim; ++i) {
-            motion_ref[i] = output_data[i] * motion_std[i] + motion_mean[i];
+            motion_ref_cmg[i] = output_data[i] * motion_std[i] + motion_mean[i];
         }
 
+        // Clamp output to ±π (±3.14 rad) to prevent explosion
+        // See on_policy_runner_residual.py line 141
+        for (size_t i = 0; i < motion_dim; ++i) {
+            motion_ref_cmg[i] = std::clamp(motion_ref_cmg[i], -3.14f, 3.14f);
+        }
+
+        // Convert CMG/SDK order back to USD/isaaclab order
+        auto motion_ref_usd = cmg_to_usd(motion_ref_cmg);
+
+        std::lock_guard<std::mutex> lock(mtx_);
+        motion_ref = motion_ref_usd;  // Store in USD order
+        forward_called = true;
+
+        if (print_debug) {
+            std::cout << "[CMG OUTPUT CMG] Motion ref pos (first 5): [";
+            for (int i = 0; i < std::min(5, (int)(motion_dim/2)); ++i) {
+                std::cout << motion_ref_cmg[i] << (i < 4 ? ", " : "");
+            }
+            std::cout << "...]" << std::endl;
+            std::cout << "[CMG OUTPUT USD] Motion ref pos (first 5): [";
+            for (int i = 0; i < std::min(5, (int)(motion_dim/2)); ++i) {
+                std::cout << motion_ref_usd[i] << (i < 4 ? ", " : "");
+            }
+            std::cout << "...]" << std::endl;
+        }
+
+        debug_counter++;
         return motion_ref;
     }
 
@@ -265,11 +389,37 @@ public:
         return motion_ref;
     }
 
-    // Get only position reference [0:29]
+    // Get only position reference [0:29] in usd/isaaclab order
     std::vector<float> get_qref()
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        return std::vector<float>(motion_ref.begin(), motion_ref.begin() + motion_dim / 2);
+
+        static int get_qref_counter = 0;
+        static bool warned_not_initialized = false;
+
+        // if (!forward_called && !warned_not_initialized) {
+        //     std::cout << "[CMG get_qref] WARNING: forward() has not been called yet! Returning zeros." << std::endl;
+        //     warned_not_initialized = true;
+        // }
+
+        auto qref = std::vector<float>(motion_ref.begin(), motion_ref.begin() + motion_dim / 2);
+
+        // if (get_qref_counter % 100 == 0) {
+        //     std::cout << "[CMG get_qref] Step " << get_qref_counter << ", forward_called=" << forward_called
+        //               << ", returning qref (first 5): [";
+        //     for (int i = 0; i < std::min(5, (int)qref.size()); ++i) {
+        //         std::cout << qref[i] << (i < 4 ? ", " : "");
+        //     }
+        //     std::cout << "...]" << std::endl;
+        //     std::cout << "[CMG get_qref] motion_ref buffer (first 5): [";
+        //     for (int i = 0; i < std::min(5, (int)motion_ref.size()); ++i) {
+        //         std::cout << motion_ref[i] << (i < 4 ? ", " : "");
+        //     }
+        //     std::cout << "...]" << std::endl;
+        // }
+        // get_qref_counter++;
+
+        return qref;
     }
 
 private:
@@ -294,11 +444,16 @@ private:
     size_t cmd_dim = 3;
 
     // Buffers
-    std::vector<float> motion_ref;        // output [58]
-    std::vector<float> motion_norm; // normalized input
+    std::vector<float> motion_ref;        // output [58] in USD order
+    std::vector<float> motion_norm; // normalized input in CMG order
     std::vector<float> cmd_norm;    // normalized command
 
+    // Joint order conversion (USD <-> CMG/SDK)
+    std::vector<int> joints_usd_to_cmg;
+    std::vector<int> joints_cmg_to_usd;
+
     std::mutex mtx_;
+    bool forward_called = false;
 };
 
 };

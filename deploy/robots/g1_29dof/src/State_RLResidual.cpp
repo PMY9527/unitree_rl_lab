@@ -43,7 +43,7 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
-    cmg = std::make_unique<isaaclab::CMGRunner>( cmg_dir / "exported" / "cmg_final.onnx", cmg_dir / "data" / "cmg_training_data.pt");
+    cmg = std::make_unique<isaaclab::CMGRunner>( cmg_dir / "exported" / "cmg_final.onnx", cmg_dir / "data" / "cmg_training_data.yaml");
 
     this->registered_checks.emplace_back(
         std::make_pair(
@@ -55,10 +55,73 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
 
 void State_RLResidual::run()
 {
-    // use raw output from cmg and add to action.
-    auto action = env->action_manager->processed_actions();
-    auto qref = cmg -> get_qref();
-    for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
-        lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i] + qref[i];
+    static int debug_counter = 0;
+    static int total_calls = 0;
+    static bool warned_not_initialized = false;
+    bool print_debug = (debug_counter % 100 == 0);  // Print every 100 steps
+
+    total_calls++;
+
+    // Wait for policy thread to compute first action before sending commands
+    if (!policy_initialized) {
+        if (!warned_not_initialized) {
+            std::cout << "[State_RLResidual] Waiting for policy to initialize..." << std::endl;
+            warned_not_initialized = true;
+        }
+        // Keep robot at default positions until policy is ready
+        for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
+            lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = env->robot->data.default_joint_pos[i];
+        }
+        return;
     }
+
+    // Lock while reading final action (qref + residual stored separately from action_manager)
+    std::vector<float> action;
+    {
+        std::lock_guard<std::mutex> lock(action_mutex);
+        action = final_action_for_control;
+    }
+
+    if (print_debug) {
+        std::cout << "\n[RLRESIDUAL DEBUG] ========== Step " << debug_counter << " (Policy updates: " << policy_update_counter.load() << ") ==========" << std::endl;
+        std::cout << "[RLRESIDUAL] Current joint pos (first 5): [";
+        for (int i = 0; i < std::min(5, (int)env->robot->data.joint_pos.size()); ++i) {
+            std::cout << env->robot->data.joint_pos[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+
+        std::cout << "[RLRESIDUAL] Current joint vel (first 5): [";
+        for (int i = 0; i < std::min(5, (int)env->robot->data.joint_vel.size()); ++i) {
+            std::cout << env->robot->data.joint_vel[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+
+        std::cout << "[RLRESIDUAL] Final action (qref+residual) (first 5): [";
+        for (int i = 0; i < std::min(5, (int)action.size()); ++i) {
+            std::cout << action[i] << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+
+        // Check position delta from current
+        float max_delta_current = 0.0f;
+        for (int i = 0; i < std::min((int)action.size(), (int)env->robot->data.joint_pos.size()); ++i) {
+            float delta = std::abs(action[i] - env->robot->data.joint_pos[i]);
+            if (delta > max_delta_current) max_delta_current = delta;
+        }
+        std::cout << "[RLRESIDUAL] Max position delta from current: " << max_delta_current << " rad" << std::endl;
+    }
+
+    for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
+        lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
+    }
+
+    if (print_debug) {
+        std::cout << "[RLRESIDUAL] Final command (first 5): [";
+        for (int i = 0; i < std::min(5, (int)env->robot->data.joint_ids_map.size()); ++i) {
+            std::cout << lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() << (i < 4 ? ", " : "");
+        }
+        std::cout << "...]" << std::endl;
+    }
+
+    debug_counter++;
 }
