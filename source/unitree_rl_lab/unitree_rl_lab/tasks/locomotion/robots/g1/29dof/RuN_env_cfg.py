@@ -5,6 +5,7 @@ import isaaclab.terrains as terrain_gen
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -100,6 +101,28 @@ class EventCfg: #TODO
         },
     )
 
+    randomize_actuator_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "stiffness_distribution_params": (0.7, 1.3),
+            "damping_distribution_params": (0.7, 1.3),
+            "operation": "scale",
+        },
+    )
+
+    randomize_joint_friction = EventTerm(
+        func=mdp.randomize_joint_parameters,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "friction_distribution_params": (0.0, 0.5),
+            "armature_distribution_params": (0.0, 0.05),
+            "operation": "abs",
+        },
+    )
+
     # reset
     base_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
@@ -155,16 +178,16 @@ class CommandsCfg:
         rel_standing_envs=0.02,
         rel_heading_envs=1.0,
         heading_command=False,
-        debug_vis=True,
+        debug_vis=False,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 3.0),
-            lin_vel_y=(-0.3, 0.3),
-            ang_vel_z=(-0.5, 0.5)
+            lin_vel_x=(-0.1, 1.3), #TODO set to (-0.1, 0.1) for better low speed?
+            lin_vel_y=(-0.1, 0.1),
+            ang_vel_z=(-0.1, 0.1)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 3.0),
+            lin_vel_x=(-0.5, 3.5),
             lin_vel_y=(-0.3, 0.3),
-            ang_vel_z=(-0.5, 0.5)
+            ang_vel_z=(-1.0, 1.0)
         ),
     )
 
@@ -245,8 +268,8 @@ class RewardsCfg:
     )
 
     #Imitation Rewards
-    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2, weight=1.0)
-    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2, weight=0.2)
+    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.0, params={"command_name": "base_velocity", "gated":True})
+    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.2, params={"command_name": "base_velocity", "gated":True})
 
     # Regularization
     alive = RewTerm(func=mdp.is_alive, weight=1.0)
@@ -256,6 +279,7 @@ class RewardsCfg:
     energy = RewTerm(func=mdp.energy, weight=-1e-5)
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.04)
     action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.06)
+    residual_magnitude = RewTerm(func=mdp.action_magnitude_l2, weight=-0.01)
     #TODO Feet Force Value?
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5e-8)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
@@ -276,7 +300,7 @@ class RewardsCfg:
     )
     joint_deviation_waists = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.2,
+        weight=-0.5,
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -299,6 +323,55 @@ class RewardsCfg:
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
         },
     )
+    
+    # Low-speed gated rewards (from velocity_env_cfg, active when vx < 1.3)
+    base_linear_velocity_walk = RewTerm(
+        func=mdp.lin_vel_z_l2_gated, weight=-2.0,
+        params={"command_name": "base_velocity"},
+    )
+    joint_vel_walk = RewTerm(
+        func=mdp.joint_vel_l2_gated, weight=-0.001,
+        params={"command_name": "base_velocity"},
+    )
+    gait_walk = RewTerm(
+        func=mdp.feet_gait_gated,
+        weight=0.5,
+        params={
+            "period": 0.8,
+            "offset": [0.0, 0.5],
+            "threshold": 0.55,
+            "command_name": "base_velocity",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+        },
+    )
+    
+    feet_clearance_walk = RewTerm(
+        func=mdp.feet_clearance_gated,
+        weight=1.0,
+        params={
+            "command_name": "base_velocity",
+            "std": 0.05,
+            "tanh_mult": 2.0,
+            "target_height": 0.1,
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+        },
+    )
+
+    base_height_walk = RewTerm(
+        func=mdp.base_height_gated,
+        weight=-10.0,
+        params={"command_name": "base_velocity", "target_height": 0.78},
+    )
+
+    undesired_contacts_walk = RewTerm(
+        func=mdp.undesired_contacts_gated,
+        weight=-1.0,
+        params={
+            "command_name": "base_velocity",
+            "threshold": 1,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["(?!.*ankle.*).*"]),
+        },
+    )
 
 
 @configclass
@@ -309,6 +382,10 @@ class TerminationsCfg:
     base_height = DoneTerm(func=mdp.root_height_below_minimum, params={"minimum_height": 0.2})
     bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
 
+@configclass
+class CurriculumCfg:
+    """Curriculum terms for the MDP."""
+    lin_vel_cmd_levels = CurrTerm(mdp.lin_vel_cmd_levels)
 
 @configclass
 class RuNEnvCfg(ManagerBasedRLEnvCfg):
@@ -320,7 +397,7 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    curriculum = None  # No curriculum
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         """Post initialization."""
@@ -338,12 +415,12 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
 class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 16
-        self.scene.env_spacing = 2.5
+        self.scene.num_envs = 12
+        self.scene.env_spacing = 2.0
         self.scene.terrain.terrain_generator.num_rows = 2
-        self.scene.terrain.terrain_generator.num_cols = 5
+        self.scene.terrain.terrain_generator.num_cols = 2
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 0.3),
+            lin_vel_x=(0.0, 0.5),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0)
         )

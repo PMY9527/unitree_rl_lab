@@ -10,7 +10,6 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 @configclass
 class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    # obs_groups = {"policy": ["policy"], "critic": ["critic"]} # velocity_env_cfg.py -> class CriticCfg(ObsGroup) This creates an observation group called "critic"
     max_iterations = 50000
     save_interval = 100
     experiment_name = ""  # same as task name

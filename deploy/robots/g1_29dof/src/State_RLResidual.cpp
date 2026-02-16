@@ -14,7 +14,7 @@ REGISTER_OBSERVATION(keyboard_velocity_commands)
     static auto cfg = env->cfg["commands"]["base_velocity"]["ranges"];
 
     static std::unordered_map<std::string, std::vector<float>> key_commands = {
-        {"w", {1.0f, 0.0f, 0.0f}},
+        {"w", {0.2f, 0.0f, 0.0f}},
         {"s", {-1.0f, 0.0f, 0.0f}},
         {"a", {0.0f, 1.0f, 0.0f}},
         {"d", {0.0f, -1.0f, 0.0f}},
@@ -42,8 +42,8 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
-    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
-    cmg = std::make_unique<isaaclab::CMGRunner>( cmg_dir / "exported" / "cmg_final.onnx", cmg_dir / "data" / "cmg_training_data.yaml");
+    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy_mlp.onnx");
+    cmg = std::make_unique<isaaclab::CMGRunner>(cmg_dir / "exported" / "cmg_exported.onnx", cmg_dir / "stats" / "cmg_stats.yaml");
 
     this->registered_checks.emplace_back(
         std::make_pair(
@@ -58,7 +58,7 @@ void State_RLResidual::run()
     static int debug_counter = 0;
     static int total_calls = 0;
     static bool warned_not_initialized = false;
-    bool print_debug = (debug_counter % 100 == 0);  // Print every 100 steps
+    bool print_debug = false; // (debug_counter % 100 == 0);  // Print every 100 steps
 
     total_calls++;
 

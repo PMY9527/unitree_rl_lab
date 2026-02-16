@@ -173,6 +173,36 @@ def main():
             # Get raw robot data for CMG (avoids observation scaling issues)
             robot = env.unwrapped.scene["robot"]
             robot_data = (robot.data.joint_pos, robot.data.joint_vel)
+
+            # Dump obs at step 0 for sim2sim comparison
+            if timestep == 0 and os.environ.get("OBS_DUMP", "0") == "1":
+                import numpy as np
+                np.set_printoptions(precision=6, suppress=True, linewidth=200)
+                obs_tensor_raw = obs["policy"][0].cpu().numpy()
+                print(f"\n[OBS_DUMP step=0] total_dims={obs_tensor_raw.shape[0]}")
+                frame_size = 96  # ang_vel(3) gravity(3) cmd(3) pos_rel(29) vel_rel(29) last_action(29)
+                n_frames = obs_tensor_raw.shape[0] // frame_size
+                for f in range(n_frames):
+                    base = f * frame_size
+                    print(f"  Frame {f}:")
+                    print(f"    ang_vel: {obs_tensor_raw[base:base+3]}")
+                    print(f"    gravity: {obs_tensor_raw[base+3:base+6]}")
+                    print(f"    cmd:     {obs_tensor_raw[base+6:base+9]}")
+                    print(f"    pos_rel: {obs_tensor_raw[base+9:base+38]}")
+                    print(f"    vel_rel: {obs_tensor_raw[base+38:base+67]}")
+                    print(f"    last_act:{obs_tensor_raw[base+67:base+96]}")
+                # Raw sensor data
+                jp = robot.data.joint_pos[0].cpu().numpy()
+                jv = robot.data.joint_vel[0].cpu().numpy()
+                djp = robot.data.default_joint_pos[0].cpu().numpy()
+                av = robot.data.root_ang_vel_b[0].cpu().numpy()
+                gv = robot.data.projected_gravity_b[0].cpu().numpy()
+                print(f"  [RAW] joint_pos(USD): {jp}")
+                print(f"  [RAW] default_pos(USD): {djp}")
+                print(f"  [RAW] joint_vel(USD): {jv}")
+                print(f"  [RAW] ang_vel_b: {av}")
+                print(f"  [RAW] gravity_b: {gv}")
+
             # agent stepping
             actions = policy(obs, robot_data=robot_data)
             # env stepping
@@ -182,8 +212,8 @@ def main():
                 obs = TensorDict(extras["observations"], batch_size=[env.num_envs])
             else:
                 obs = TensorDict({"policy": obs_tensor}, batch_size=[env.num_envs])
+        timestep += 1
         if args_cli.video:
-            timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break

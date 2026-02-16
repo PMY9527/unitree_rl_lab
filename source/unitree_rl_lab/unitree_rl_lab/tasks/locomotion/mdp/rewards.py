@@ -226,10 +226,45 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
     return reward
 
 
-def joint_pos_from_cmg_l2(
-    env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+def joint_symmetry(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg,
+    pitch_pairs: list[list[str]],
+    flip_pairs: list[list[str]],
 ) -> torch.Tensor:
-    """Reward tracking of joint positions from CMG reference using exponential kernel."""
+    """Penalize left-right asymmetry, gated for straight walking (|vy| < 0.3, |yaw| < 0.3).
+
+    pitch_pairs: joint pairs where q_left should equal q_right (pitch joints).
+    flip_pairs: joint pairs where q_left should equal -q_right (roll/yaw joints).
+    Returns mean squared error across all pairs (penalty, use negative weight).
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    # Cache resolved joint indices
+    if not hasattr(env, "_sym_cache"):
+        env._sym_cache = {
+            "pitch": [(asset.find_joints(p[0])[0], asset.find_joints(p[1])[0]) for p in pitch_pairs],
+            "flip": [(asset.find_joints(p[0])[0], asset.find_joints(p[1])[0]) for p in flip_pairs],
+        }
+    # Gate: only enforce when going roughly straight
+    cmd = env.command_manager.get_command(command_name)
+    vy, yaw = cmd[:, 1], cmd[:, 2]
+    gate = ((vy.abs() < 0.3) & (yaw.abs() < 0.3)).float()
+
+    err = torch.zeros(env.num_envs, device=env.device)
+    q = asset.data.joint_pos
+    for l_idx, r_idx in env._sym_cache["pitch"]:
+        err += (q[:, l_idx] - q[:, r_idx]).square().sum(dim=-1)
+    for l_idx, r_idx in env._sym_cache["flip"]:
+        err += (q[:, l_idx] + q[:, r_idx]).square().sum(dim=-1)
+    n_pairs = len(pitch_pairs) + len(flip_pairs)
+    return gate * err / max(n_pairs, 1)
+
+
+def joint_pos_from_cmg_l2_gated(
+    env, gated: bool, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Reward tracking of joint positions from CMG reference, activated via the commanded velocity, using exponential kernel."""
     asset: Articulation = env.scene[asset_cfg.name]
     ref_motion = env.extras.get("cmg_motion")
     if ref_motion is None:
@@ -237,14 +272,19 @@ def joint_pos_from_cmg_l2(
         return torch.zeros(env.num_envs, device=env.device)
     q_ref = ref_motion[:, :29]  # joint positions from CMG
     # exp(-0.6 * ||q - q_ref||^2)
-    reward = torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
+    if gated:   
+        cmd_vx = env.command_manager.get_command(command_name)[:, 0] # Commanded vx
+        cmg_weight = torch.clamp((cmd_vx - 1.1) / 0.2, 0.0, 1.0) # Below 1.1 -> 0, 1.1 - 1.3 ramps up, 1.3 or above -> 1
+        reward = cmg_weight * torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
+    else:
+        reward = torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
     return reward
 
 
-def joint_vel_from_cmg_l2(
-    env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+def joint_vel_from_cmg_l2_gated(
+    env, gated: bool, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
-    """Reward tracking of joint velocities from CMG reference using exponential kernel."""
+    """Reward tracking of joint velocities from CMG reference, activated via the commanded velocity, using exponential kernel."""
     asset: Articulation = env.scene[asset_cfg.name]
     ref_motion = env.extras.get("cmg_motion")
     if ref_motion is None:
@@ -252,8 +292,108 @@ def joint_vel_from_cmg_l2(
         return torch.zeros(env.num_envs, device=env.device)
     qd_ref = ref_motion[:, 29:]  # joint velocities from CMG
     # exp(-0.5 * ||qd - qd_ref||^2)
-    reward = torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
+    if gated:    
+        cmd_vx = env.command_manager.get_command(command_name)[:, 0] # Commanded vx
+        cmg_weight = torch.clamp((cmd_vx - 1.1) / 0.2, 0.0, 1.0) # Below 1.1 -> 0, 1.1 - 1.3 ramps up, 1.3 or above -> 1
+        reward = cmg_weight * torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
+    else:
+        reward = torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
     return reward
+
+def _walk_weight(env, command_name: str) -> torch.Tensor:
+    """Compute walk weight: 1.0 when cmd_vx < 1.2, ramps to 0.0 at cmd_vx >= 1.3 (inverse of CMG gating)."""
+    cmd_vx = env.command_manager.get_command(command_name)[:, 0]
+    return torch.clamp(1.0 - (cmd_vx - 1.2) / 0.2, 0.0, 1.0)
+
+
+def feet_gait_gated(
+    env: ManagerBasedRLEnv,
+    period: float,
+    offset: list[float],
+    sensor_cfg: SceneEntityCfg,
+    command_name: str,
+    threshold: float = 0.5,
+) -> torch.Tensor:
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    is_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0
+
+    global_phase = ((env.episode_length_buf * env.step_dt) % period / period).unsqueeze(1)
+    phases = []
+    for offset_ in offset:
+        phase = (global_phase + offset_) % 1.0
+        phases.append(phase)
+    leg_phase = torch.cat(phases, dim=-1)
+
+    reward = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+    for i in range(len(sensor_cfg.body_ids)):
+        is_stance = leg_phase[:, i] < threshold
+        reward += ~(is_stance ^ is_contact[:, i])
+
+    cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+    reward *= cmd_norm > 0.1  # no gait reward when standing
+    return _walk_weight(env, command_name) * reward
+
+
+def feet_clearance_gated(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    command_name: str,
+    target_height: float,
+    std: float,
+    tanh_mult: float,
+) -> torch.Tensor:
+    """Foot clearance reward active only at low speeds (walk regime)."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    foot_z_target_error = torch.square(asset.data.body_pos_w[:, asset_cfg.body_ids, 2] - target_height)
+    foot_velocity_tanh = torch.tanh(tanh_mult * torch.norm(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2], dim=2))
+    reward = foot_z_target_error * foot_velocity_tanh
+    return _walk_weight(env, command_name) * torch.exp(-torch.sum(reward, dim=1) / std)
+
+
+def base_height_gated(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    target_height: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Base height reward active only at low speeds (walk regime)."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    reward = torch.square(asset.data.root_pos_w[:, 2] - target_height)
+    return _walk_weight(env, command_name) * reward
+
+
+def undesired_contacts_gated(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    threshold: float,
+    sensor_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Undesired contacts penalty active only at low speeds (walk regime)."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    net_forces = torch.max(torch.norm(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids], dim=-1), dim=1)[0]
+    reward = (net_forces > threshold).float()
+    return _walk_weight(env, command_name) * reward
+
+
+def lin_vel_z_l2_gated(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize z-axis linear velocity, gated for low speeds only."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    return _walk_weight(env, command_name) * torch.square(asset.data.root_lin_vel_b[:, 2])
+
+
+def joint_vel_l2_gated(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalize joint velocities, gated for low speeds only."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return _walk_weight(env, command_name) * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
+
 
 def track_lin_vel_xy_yaw_frame_exp(
     env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
@@ -285,6 +425,11 @@ def is_terminated(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return 1.0 for terminated episodes (excluding timeouts)."""
 
     return (env.termination_manager.terminated & ~env.termination_manager.time_outs).float()
+
+
+def action_magnitude_l2(env) -> torch.Tensor:
+    """Penalize large action (residual) magnitudes to keep policy close to CMG reference."""
+    return torch.sum(torch.square(env.action_manager.action), dim=1)
 
 
 def action_smoothness_l2(env) -> torch.Tensor:

@@ -29,8 +29,6 @@ public:
 
         env->robot->update();
 
-        std::cout << "[State_RLResidual] Entering state - starting policy thread" << std::endl;
-
         // Initialize final_action_for_control with default positions
         final_action_for_control.resize(env->robot->data.default_joint_pos.size());
         for (size_t i = 0; i < final_action_for_control.size(); ++i) {
@@ -52,120 +50,59 @@ public:
             auto sleepTill = clock::now() + dt;
             env->reset();
 
+            const float residual_clamp = 1.0f;
+            const float residual_scale = 0.25f;
+
             int policy_debug_counter = 0;
             while (policy_thread_running)
             {
-                bool print_policy_debug = (policy_debug_counter % 100 == 0);
+                bool print_debug = (policy_debug_counter % 50 == 0);
 
-                // CRITICAL: Update robot state BEFORE using it for CMG
-                // This ensures CMG and policy see the same robot state
                 env->robot->update();
 
-                // Get current robot state
                 auto& joint_pos = env->robot->data.joint_pos;
                 auto& joint_vel = env->robot->data.joint_vel;
-
-                // Get velocity command from registered observation
                 auto command = isaaclab::observations_map()["keyboard_velocity_commands"](env.get(), {});
 
-                if (print_policy_debug) {
-                    std::cout << "\n[RLRESIDUAL POLICY THREAD] ========== Step " << policy_debug_counter << " ==========" << std::endl;
-
-                    // Print raw robot state
-                    std::cout << "[RLRESIDUAL POLICY] Raw joint pos (first 5): [";
-                    for (int i = 0; i < std::min(5, (int)joint_pos.size()); ++i) {
-                        std::cout << joint_pos[i] << (i < 4 ? ", " : "");
-                    }
-                    std::cout << "...]" << std::endl;
-
-                    std::cout << "[RLRESIDUAL POLICY] Raw joint vel (first 5): [";
-                    for (int i = 0; i < std::min(5, (int)joint_vel.size()); ++i) {
-                        std::cout << joint_vel[i] << (i < 4 ? ", " : "");
-                    }
-                    std::cout << "...]" << std::endl;
-
-                    // Print observations that will be fed to policy
-                    auto obs_joint_pos_rel = isaaclab::observations_map()["joint_pos_rel"](env.get(), {});
-                    std::cout << "[RLRESIDUAL POLICY] Observation joint_pos_rel (first 5): [";
-                    for (int i = 0; i < std::min(5, (int)obs_joint_pos_rel.size()); ++i) {
-                        std::cout << obs_joint_pos_rel[i] << (i < 4 ? ", " : "");
-                    }
-                    std::cout << "...]" << std::endl;
-
-                    auto obs_joint_vel_rel = isaaclab::observations_map()["joint_vel_rel"](env.get(), {});
-                    std::cout << "[RLRESIDUAL POLICY] Observation joint_vel_rel (first 5): [";
-                    for (int i = 0; i < std::min(5, (int)obs_joint_vel_rel.size()); ++i) {
-                        std::cout << obs_joint_vel_rel[i] << (i < 4 ? ", " : "");
-                    }
-                    std::cout << "...]" << std::endl;
-
-                    auto obs_last_action = isaaclab::observations_map()["last_action"](env.get(), {});
-                    std::cout << "[RLRESIDUAL POLICY] Observation last_action (first 5): [";
-                    for (int i = 0; i < std::min(5, (int)obs_last_action.size()); ++i) {
-                        std::cout << obs_last_action[i] << (i < 4 ? ", " : "");
-                    }
-                    std::cout << "...]" << std::endl;
-
-                    std::cout << "[RLRESIDUAL POLICY] Observation velocity command: [" << command[0] << ", " << command[1] << ", " << command[2] << "]" << std::endl;
-                }
-
-                // CMG takes CURRENT robot state as input (not autoregressive!)
                 std::vector<float> joint_pos_vec(joint_pos.data(), joint_pos.data() + joint_pos.size());
                 std::vector<float> joint_vel_vec(joint_vel.data(), joint_vel.data() + joint_vel.size());
                 std::vector<float> command_vec(command.data(), command.data() + command.size());
 
-                // Run CMG forward pass with current robot state
-                cmg->forward(joint_pos_vec, joint_vel_vec, command_vec);
-
-                // CRITICAL: Lock the entire sequence to prevent control thread from reading
-                // intermediate state (residual only) instead of final action (qref + residual)
                 {
                     std::lock_guard<std::mutex> lock(action_mutex);
 
-                    // Run RL policy to get residual
-                    env->step();
+                    env->episode_length += 1;
+                    env->robot->update();
 
-                    // Get RAW residual (before scale/offset/clip processing)
-                    auto residual = env->action_manager->action();
+                    cmg->forward_ar(joint_pos_vec, joint_vel_vec, command_vec);
                     auto qref = cmg->get_qref();
 
-                    if (print_policy_debug) {
-                        std::cout << "[RLRESIDUAL POLICY] CMG qref (first 5): [";
-                        for (int i = 0; i < std::min(5, (int)qref.size()); ++i) {
-                            std::cout << qref[i] << (i < 4 ? ", " : "");
-                        }
-                        std::cout << "...]" << std::endl;
+                    auto obs_map = env->observation_manager->compute();
 
-                        std::cout << "[RLRESIDUAL POLICY] RL residual (first 5): [";
-                        for (int i = 0; i < std::min(5, (int)residual.size()); ++i) {
-                            std::cout << residual[i] << (i < 4 ? ", " : "");
-                        }
-                        std::cout << "...]" << std::endl;
+                    auto residual = env->alg->act(obs_map);
+                    env->action_manager->process_action(residual);
+                    residual = env->action_manager->action();
+
+                    float max_abs_residual = 0.0f;
+                    for (size_t i = 0; i < residual.size(); ++i) {
+                        float abs_r = std::abs(residual[i]);
+                        if (abs_r > max_abs_residual) max_abs_residual = abs_r;
+                        residual[i] = std::clamp(residual[i], -residual_clamp, residual_clamp);
                     }
 
-                    // TEST: Send only residual to motors (no CMG qref)
-                    // This matches RLBase behavior to test if CMG is causing instability
                     final_action_for_control.resize(residual.size());
                     for (size_t i = 0; i < residual.size(); ++i) {
-                        final_action_for_control[i] = residual[i];  // ONLY residual, no qref!
-                        // final_action_for_control[i] = qref[i] + residual[i];  // Original: qref + residual
+                        final_action_for_control[i] = qref[i] + residual_scale * residual[i];
                     }
 
-                    if (print_policy_debug) {
-                        std::cout << "[RLRESIDUAL POLICY] Final action (residual only, NO CMG): [";
-                        for (int i = 0; i < std::min(5, (int)final_action_for_control.size()); ++i) {
-                            std::cout << final_action_for_control[i] << (i < 4 ? ", " : "");
-                        }
-                        std::cout << "...]" << std::endl;
-                    }
+                    // Store as last_action for next step
+                    env->action_manager->process_action(final_action_for_control);
 
-                    // CRITICAL: Do NOT call process_action(final_action)!
-                    // Keep residual in action_manager so next iteration's last_action observation
-                    // reads the residual (matching RLBase behavior, where it works stably)
-                    // The final_action_for_control is stored separately for control thread
+                    final_action_for_control[25] = 0.0f;  // left wrist pitch
+                    final_action_for_control[26] = 0.0f;  // right wrist pitch
 
                     if (!policy_initialized) {
-                        std::cout << "[Policy Thread] First action computed, control thread can now proceed" << std::endl;
+                        std::cout << "[Policy Thread] First action computed" << std::endl;
                         policy_initialized = true;
                     }
                     policy_update_counter++;
@@ -202,9 +139,7 @@ private:
 
     // Mutex to protect action/qref reads and writes
     std::mutex action_mutex;
-
-    // Store final action (qref + residual) for control thread
-    // action_manager stores only residual for last_action observation
+    
     std::vector<float> final_action_for_control;
 };
 
