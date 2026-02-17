@@ -73,3 +73,9 @@ datasets
 
 # Mimic
 *.npz
+
+# My shit
+rsl_rl_ppo_residual_cfg_cp_lstm.py
+rsl_rl_ppo_residual_cfg_cp_mlp.py
+ONNX_FIX.md
+.claude

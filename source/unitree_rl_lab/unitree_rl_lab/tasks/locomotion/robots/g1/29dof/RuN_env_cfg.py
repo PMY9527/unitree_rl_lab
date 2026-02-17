@@ -164,7 +164,7 @@ class EventCfg: #TODO
         func=mdp.push_by_setting_velocity,
         mode="interval",
         interval_range_s=(5.0, 5.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+        params={"velocity_range": {"x": (-0.8, 0.8), "y": (-0.8, 0.8)}}, # increased from 0.5 
     )
 
 
@@ -178,7 +178,7 @@ class CommandsCfg:
         rel_standing_envs=0.02,
         rel_heading_envs=1.0,
         heading_command=False,
-        debug_vis=False,
+        debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-0.1, 1.3), #TODO set to (-0.1, 0.1) for better low speed?
             lin_vel_y=(-0.1, 0.1),
@@ -196,9 +196,8 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    # For residual learning: qref is already absolute joint positions, no scaling needed
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=False
+        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=False
     )
 
 
