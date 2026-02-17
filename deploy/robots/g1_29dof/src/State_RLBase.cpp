@@ -14,7 +14,7 @@ REGISTER_OBSERVATION(keyboard_velocity_commands)
     static auto cfg = env->cfg["commands"]["base_velocity"]["ranges"];
 
     static std::unordered_map<std::string, std::vector<float>> key_commands = {
-        {"w", {1.0f, 0.0f, 0.0f}},
+        {"w", {3.0f, 0.0f, 0.0f}},
         {"s", {-1.0f, 0.0f, 0.0f}},
         {"a", {0.0f, 1.0f, 0.0f}},
         {"d", {0.0f, -1.0f, 0.0f}},

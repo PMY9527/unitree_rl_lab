@@ -1,10 +1,8 @@
 // Copyright (c) 2025, Unitree Robotics Co., Ltd.
 // All rights reserved.
-
 // LSTM model has:                                                                                                                                      
 //   - Inputs: obs (480), h_in (2×1×256), c_in (2×1×256)                                                                                                                
-//   - Outputs: actions (29), h_out (2×1×256), c_out (2×1×256) 
-// TODO: import CMG. 
+//   - Outputs: actions (29), h_out (2×1×256), c_out (2×1×256)  
 #pragma once
 
 #include "onnxruntime_cxx_api.h"
@@ -13,6 +11,12 @@
 
 namespace isaaclab
 {
+
+// ONNX Runtime requires exactly one Ort::Env per process
+inline Ort::Env& get_ort_env() {
+    static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "onnx");
+    return env;
+}
 
 class Algorithms
 {
@@ -30,19 +34,17 @@ protected:
     std::mutex act_mtx_;
 };
 
-// OrtRunner
-// 策略，从env读取观测项，
-// 输出，残差action。
 class OrtRunner : public Algorithms
 {
 public:
     OrtRunner(std::string model_path)
     {
         // Init Model
-        env = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "onnx_model");
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
+        session_options.SetIntraOpNumThreads(1);
+        session_options.SetInterOpNumThreads(1);
 
-        session = std::make_unique<Ort::Session>(env, model_path.c_str(), session_options);
+        session = std::make_unique<Ort::Session>(get_ort_env(), model_path.c_str(), session_options);
 
         for (size_t i = 0; i < session->GetInputCount(); ++i) {
             Ort::TypeInfo input_type = session->GetInputTypeInfo(i);
@@ -133,7 +135,6 @@ public:
     }
 
 private:
-    Ort::Env env;
     Ort::SessionOptions session_options;
     std::unique_ptr<Ort::Session> session;
     Ort::AllocatorWithDefaultOptions allocator;
@@ -158,14 +159,15 @@ public:
     {
         
         joints_cmg_to_usd = {0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10,
-                             16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28};
+                             16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28}; // correct
         joints_usd_to_cmg = {0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8, 11,
-                             15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28};
+                             15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28}; // correct
 
         // Init ONNX Model
-        env = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "cmg_model");
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
-        session = std::make_unique<Ort::Session>(env, model_path.c_str(), session_options);
+        session_options.SetIntraOpNumThreads(1);
+        session_options.SetInterOpNumThreads(1);
+        session = std::make_unique<Ort::Session>(get_ort_env(), model_path.c_str(), session_options);
 
         // Get input info
         for (size_t i = 0; i < session->GetInputCount(); ++i) {
@@ -267,33 +269,21 @@ public:
         return motion_usd;
     }
 
-    // Autoregressive forward pass (matches training behavior)
-    // On first call (or after reset_ar()), initializes from robot state.
-    // On subsequent calls, feeds CMG's own previous output as input.
-    std::vector<float> forward_ar(const std::vector<float>& joint_pos_usd,
-                                   const std::vector<float>& joint_vel_usd,
-                                   const std::vector<float>& command)
+    // Non-autoregressive forward pass.
+    // Uses actual robot state every step.
+    std::vector<float> forward(const std::vector<float>& joint_pos_usd,
+                               const std::vector<float>& joint_vel_usd,
+                               const std::vector<float>& command)
     {
-        static int debug_counter = 0;
-        bool print_debug = (debug_counter % 100 == 0);
+        auto motion_cmg = usd_to_cmg(joint_pos_usd, joint_vel_usd);
 
-        // Initialize AR state from robot state on first call
-        if (!ar_initialized) {
-            prev_output_cmg = usd_to_cmg(joint_pos_usd, joint_vel_usd);
-            ar_initialized = true;
-            std::cout << "[CMG] Initialized from current robot state" << std::endl;
-        }
-
-        // Use previous CMG output as input (autoregressive)
-        // Clamp to mean ± 3*std, then normalize
         for (size_t i = 0; i < motion_dim; ++i) {
-            float clamped = std::clamp(prev_output_cmg[i],
+            float clamped = std::clamp(motion_cmg[i],
                                        motion_mean[i] - 3.0f * motion_std[i],
                                        motion_mean[i] + 3.0f * motion_std[i]);
             motion_norm[i] = (clamped - motion_mean[i]) / motion_std[i];
         }
 
-        // Normalize command
         for (size_t i = 0; i < cmd_dim; ++i) {
             float range = cmd_max[i] - cmd_min[i];
             if (range > 1e-6f) {
@@ -303,7 +293,6 @@ public:
             }
         }
 
-        // Run ONNX inference
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
         std::vector<Ort::Value> input_tensors;
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
@@ -318,24 +307,75 @@ public:
             input_names.data(), input_tensors.data(), input_tensors.size(),
             output_names.data(), output_names.size());
 
-        // Denormalize output (in CMG order)
         auto* output_data = output_tensors[0].GetTensorMutableData<float>();
         std::vector<float> motion_ref_cmg(motion_dim);
         for (size_t i = 0; i < motion_dim; ++i) {
             motion_ref_cmg[i] = output_data[i] * motion_std[i] + motion_mean[i];
         }
 
-        // Store as next AR input (in CMG order, before USD conversion)
-        prev_output_cmg = motion_ref_cmg;
-
-        // Convert to USD order
         auto motion_ref_usd = cmg_to_usd(motion_ref_cmg);
 
         std::lock_guard<std::mutex> lock(mtx_);
         motion_ref = motion_ref_usd;
         forward_called = true;
+        return motion_ref;
+    }
 
-        debug_counter++;
+    // Autoregressive forward pass.
+    // On first call (or after reset_ar()), initializes from robot state.
+    // On subsequent calls, feeds CMG's own previous output as input.
+    std::vector<float> forward_ar(const std::vector<float>& joint_pos_usd,
+                                   const std::vector<float>& joint_vel_usd,
+                                   const std::vector<float>& command)
+    {
+        if (!ar_initialized) {
+            prev_output_cmg = usd_to_cmg(joint_pos_usd, joint_vel_usd);
+            ar_initialized = true;
+        }
+
+        for (size_t i = 0; i < motion_dim; ++i) {
+            float clamped = std::clamp(prev_output_cmg[i],
+                                       motion_mean[i] - 3.0f * motion_std[i],
+                                       motion_mean[i] + 3.0f * motion_std[i]);
+            motion_norm[i] = (clamped - motion_mean[i]) / motion_std[i];
+        }
+
+        for (size_t i = 0; i < cmd_dim; ++i) {
+            float range = cmd_max[i] - cmd_min[i];
+            if (range > 1e-6f) {
+                cmd_norm[i] = (command[i] - cmd_min[i]) / range * 2.0f - 1.0f;
+            } else {
+                cmd_norm[i] = 0.0f;
+            }
+        }
+
+        auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
+        std::vector<Ort::Value> input_tensors;
+        input_tensors.push_back(Ort::Value::CreateTensor<float>(
+            memory_info, motion_norm.data(), motion_dim,
+            input_shapes[0].data(), input_shapes[0].size()));
+        input_tensors.push_back(Ort::Value::CreateTensor<float>(
+            memory_info, cmd_norm.data(), cmd_dim,
+            input_shapes[1].data(), input_shapes[1].size()));
+
+        auto output_tensors = session->Run(
+            Ort::RunOptions{nullptr},
+            input_names.data(), input_tensors.data(), input_tensors.size(),
+            output_names.data(), output_names.size());
+
+        auto* output_data = output_tensors[0].GetTensorMutableData<float>();
+        std::vector<float> motion_ref_cmg(motion_dim);
+        for (size_t i = 0; i < motion_dim; ++i) {
+            motion_ref_cmg[i] = output_data[i] * motion_std[i] + motion_mean[i];
+        }
+
+        prev_output_cmg = motion_ref_cmg;
+
+        auto motion_ref_usd = cmg_to_usd(motion_ref_cmg);
+
+        std::lock_guard<std::mutex> lock(mtx_);
+        motion_ref = motion_ref_usd;
+        forward_called = true;
         return motion_ref;
     }
 
@@ -363,7 +403,6 @@ public:
 
 private:
     // ONNX Runtime
-    Ort::Env env;
     Ort::SessionOptions session_options;
     std::unique_ptr<Ort::Session> session;
     Ort::AllocatorWithDefaultOptions allocator;
