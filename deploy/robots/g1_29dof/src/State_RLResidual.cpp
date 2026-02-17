@@ -17,10 +17,6 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
     cmg = std::make_unique<isaaclab::CMGRunner>(cmg_dir / "exported" / "cmg_exported.onnx", cmg_dir / "stats" / "cmg_stats.yaml");
 
-    // Pre-allocate qref
-    qref.resize(env->robot->data.default_joint_pos.size(), 0.0f);
-    final_action.resize(env->robot->data.default_joint_pos.size(), 0.0f);
-
     this->registered_checks.emplace_back(
         std::make_pair(
             [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
@@ -31,12 +27,9 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
 
 void State_RLResidual::run()
 {
-    auto residual = env->action_manager->processed_actions();
-                   
+    // processed_actions = 0.25 * (qref + residual), matching training exactly
+    auto action = env->action_manager->processed_actions();
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
-        final_action[i] = qref[i] + residual[i];
-        final_action[25] = 0.0f;
-        final_action[26] = 0.0f;
-        lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = final_action[i];
+        lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
 }

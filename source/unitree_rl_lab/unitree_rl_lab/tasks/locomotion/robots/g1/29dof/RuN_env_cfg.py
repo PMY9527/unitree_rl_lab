@@ -414,12 +414,12 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
 class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 12
+        self.scene.num_envs = 48
         self.scene.env_spacing = 2.0
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 2
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 0.5),
+            lin_vel_x=(0.0, 3.5),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0)
         )

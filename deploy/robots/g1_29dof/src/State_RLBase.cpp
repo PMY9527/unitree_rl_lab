@@ -10,23 +10,32 @@ namespace isaaclab
 // change "velocity_commands" observation name in policy deploy.yaml to "keyboard_velocity_commands"
 REGISTER_OBSERVATION(keyboard_velocity_commands)
 {
-    std::string key = FSMState::keyboard->key();
-    static auto cfg = env->cfg["commands"]["base_velocity"]["ranges"];
+    static auto ranges = env->cfg["commands"]["base_velocity"]["ranges"];
+    static std::vector<float> cmd = {0.0f, 0.0f, 0.0f};
+    static std::string prev_key = "";
+    constexpr float step = 0.1f;
 
-    static std::unordered_map<std::string, std::vector<float>> key_commands = {
-        {"w", {3.0f, 0.0f, 0.0f}},
-        {"s", {-1.0f, 0.0f, 0.0f}},
-        {"a", {0.0f, 1.0f, 0.0f}},
-        {"d", {0.0f, -1.0f, 0.0f}},
-        {"q", {0.0f, 0.0f, 1.0f}},
-        {"e", {0.0f, 0.0f, -1.0f}}
-    };
-    std::vector<float> cmd = {0.0f, 0.0f, 0.0f};
-    if (key_commands.find(key) != key_commands.end())
-    {
-        // TODO: smooth and limit the velocity commands
-        cmd = key_commands[key];
+    std::string key = FSMState::keyboard->key();
+
+    // Increment on new key press (edge-triggered)
+    if (!key.empty() && key != prev_key) {
+        if      (key == "w") cmd[0] += step;
+        else if (key == "s") cmd[0] -= step;
+        else if (key == "a") cmd[1] += step;
+        else if (key == "d") cmd[1] -= step;
+        else if (key == "q") cmd[2] += step;
+        else if (key == "e") cmd[2] -= step;
+        else if (key == "x") { cmd[0] = 0; cmd[1] = 0; cmd[2] = 0; }
+
+        cmd[0] = std::clamp(cmd[0], ranges["lin_vel_x"][0].as<float>(), ranges["lin_vel_x"][1].as<float>());
+        cmd[1] = std::clamp(cmd[1], ranges["lin_vel_y"][0].as<float>(), ranges["lin_vel_y"][1].as<float>());
+        cmd[2] = std::clamp(cmd[2], ranges["ang_vel_z"][0].as<float>(), ranges["ang_vel_z"][1].as<float>());
+
+        printf("\r[CMD] vx:%+.1f vy:%+.1f wz:%+.1f  ", cmd[0], cmd[1], cmd[2]);
+        fflush(stdout);
     }
+    prev_key = key;
+
     return cmd;
 }
 

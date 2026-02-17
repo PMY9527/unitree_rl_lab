@@ -253,7 +253,7 @@ public:
         return motion_cmg;
     }
 
-    // Convert CMG/SDK order to USD order
+    // Convert CMG/SDK order to USD order, correct.
     std::vector<float> cmg_to_usd(const std::vector<float>& motion_cmg)
     {
         std::vector<float> pos_cmg(motion_cmg.begin(), motion_cmg.begin() + 29);
@@ -386,7 +386,6 @@ public:
         return motion_ref;
     }
 
-    // Get only position reference [0:29] in usd/isaaclab order
     std::vector<float> get_qref()
     {
         std::lock_guard<std::mutex> lock(mtx_);

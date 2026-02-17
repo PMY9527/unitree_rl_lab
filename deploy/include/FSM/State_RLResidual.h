@@ -38,20 +38,32 @@ public:
 
             while (policy_thread_running)
             {
+                // 1. Policy step: robot update, obs compute (last_action from prev combined), policy act
                 env->step();
 
-                // CMG runs after policy step
+                // 2. CMG: non-AR forward with actual robot state (matches training)
                 auto& jp = env->robot->data.joint_pos;
                 auto& jv = env->robot->data.joint_vel;
                 auto cmd = isaaclab::observations_map()["keyboard_velocity_commands"](env.get(), {});
-                cmg->forward( // forward_ar() for AR
+                cmg->forward(
                     {jp.data(), jp.data() + jp.size()},
                     {jv.data(), jv.data() + jv.size()},
                     {cmd.data(), cmd.data() + cmd.size()}
                 );
                 auto qr = cmg->get_qref();
-                for (size_t i = 0; i < qref.size(); ++i)
-                    qref[i] = qr[i];
+
+                // 3. Combine: qref + raw_residual (matches training's env.step input)
+                auto raw_residual = env->action_manager->action();
+                std::vector<float> combined(raw_residual.size());
+                for (size_t i = 0; i < combined.size(); ++i)
+                    combined[i] = qr[i] + raw_residual[i];
+                combined[25] = 0.0f;  // zero wrist pitch (matches training)
+                combined[26] = 0.0f;
+
+                // 4. Override action_manager with combined action
+                //    - Fixes last_action obs: next step sees qref+residual (not just residual)
+                //    - Fixes scaling: processed_actions = 0.25 * (qref + residual)
+                env->action_manager->process_action(combined);
 
                 // Sleep
                 std::this_thread::sleep_until(sleepTill);
@@ -73,7 +85,6 @@ public:
 private:
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::unique_ptr<isaaclab::CMGRunner> cmg;
-    std::vector<float> qref, final_action;
 
     std::thread policy_thread;
     bool policy_thread_running = false;
