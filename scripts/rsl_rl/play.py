@@ -165,6 +165,7 @@ def main():
         from tensordict import TensorDict
         obs = TensorDict(obs_extras.get("observations", {"policy": obs_tensor}), batch_size=[env.num_envs])
     timestep = 0
+    prev_dones = None
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -203,10 +204,11 @@ def main():
                 print(f"  [RAW] ang_vel_b: {av}")
                 print(f"  [RAW] gravity_b: {gv}")
 
-            # agent stepping
-            actions = policy(obs, robot_data=robot_data)
+            # agent stepping (pass prev dones so AR CMG resets for terminated envs)
+            actions = policy(obs, robot_data=robot_data, dones=prev_dones)
             # env stepping
-            obs_tensor, _, _, extras = env.step(actions)
+            obs_tensor, _, dones, extras = env.step(actions)
+            prev_dones = dones
             # Reconstruct TensorDict from extras
             if "observations" in extras:
                 obs = TensorDict(extras["observations"], batch_size=[env.num_envs])

@@ -27,7 +27,6 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
 
 void State_RLResidual::run()
 {
-    // processed_actions = 0.25 * (qref + residual), matching training exactly
     auto action = env->action_manager->processed_actions();
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];

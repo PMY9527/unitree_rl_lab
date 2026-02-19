@@ -149,9 +149,6 @@ private:
     std::unordered_map<std::string, std::vector<float>> hidden_states;
 };
 
-// CMG Runner
-// Input: joint_pos[29] + joint_vel[29] + command[3] （直接从机器人读取，concat后
-// Output: motion_ref[58] (reference joint positions + velocities) (未归一化，绝对值)
 class CMGRunner
 {
 public:
@@ -202,14 +199,6 @@ public:
         std::cout << "[CMGRunner] Input shapes: motion=[" << input_shapes[0][0] << "," << input_shapes[0][1]
                   << "], cmd=[" << input_shapes[1][0] << "," << input_shapes[1][1] << "]" << std::endl;
         std::cout << "[CMGRunner] Output shape: [" << output_shapes[0][0] << "," << output_shapes[0][1] << "]" << std::endl;
-
-        // Print permutation arrays
-        std::cout << "[CMGRunner] joints_usd_to_cmg: [";
-        for (int i = 0; i < 29; ++i) std::cout << joints_usd_to_cmg[i] << (i < 28 ? ", " : "");
-        std::cout << "]" << std::endl;
-        std::cout << "[CMGRunner] joints_cmg_to_usd: [";
-        for (int i = 0; i < 29; ++i) std::cout << joints_cmg_to_usd[i] << (i < 28 ? ", " : "");
-        std::cout << "]" << std::endl;
     }
 
     void load_stats(const std::string& data_path)
@@ -225,21 +214,9 @@ public:
         cmd_dim = cmd_min.size();         // 3
 
         std::cout << "[CMGRunner] Loaded stats from: " << data_path << std::endl;
-        std::cout << "[CMGRunner] Stats - motion_mean (first 5): [";
-        for (int i = 0; i < std::min(5, (int)motion_mean.size()); ++i) {
-            std::cout << motion_mean[i] << (i < 4 ? ", " : "");
-        }
-        std::cout << "...]" << std::endl;
-        std::cout << "[CMGRunner] Stats - motion_std (first 5): [";
-        for (int i = 0; i < std::min(5, (int)motion_std.size()); ++i) {
-            std::cout << motion_std[i] << (i < 4 ? ", " : "");
-        }
-        std::cout << "...]" << std::endl;
-        std::cout << "[CMGRunner] Stats - cmd_min: [" << cmd_min[0] << ", " << cmd_min[1] << ", " << cmd_min[2] << "]" << std::endl;
-        std::cout << "[CMGRunner] Stats - cmd_max: [" << cmd_max[0] << ", " << cmd_max[1] << ", " << cmd_max[2] << "]" << std::endl;
     }
 
-    // Convert USD order to CMG/SDK order
+    // Convert USD order to CMG/SDK order, correct.
     std::vector<float> usd_to_cmg(const std::vector<float>& pos_usd, const std::vector<float>& vel_usd)
     {
         std::vector<float> pos_cmg(29), vel_cmg(29);
@@ -321,9 +298,8 @@ public:
         return motion_ref;
     }
 
-    // Autoregressive forward pass.
-    // On first call (or after reset_ar()), initializes from robot state.
-    // On subsequent calls, feeds CMG's own previous output as input.
+    // AR forward pass.
+    // On first call initializes from robot state.
     std::vector<float> forward_ar(const std::vector<float>& joint_pos_usd,
                                    const std::vector<float>& joint_vel_usd,
                                    const std::vector<float>& command)
@@ -421,7 +397,7 @@ private:
     size_t cmd_dim = 3;
 
     // Buffers
-    std::vector<float> motion_ref;        // output [58] in USD order
+    std::vector<float> motion_ref;  // output [58] in USD order
     std::vector<float> motion_norm; // normalized input in CMG order
     std::vector<float> cmd_norm;    // normalized command
 
