@@ -197,7 +197,7 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=False
+        asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=False
     )
 
 
@@ -278,14 +278,14 @@ class RewardsCfg:
     energy = RewTerm(func=mdp.energy, weight=-1e-5)
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.04)
     action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.06)
-    residual_magnitude = RewTerm(func=mdp.action_magnitude_l2, weight=-0.01)
+    residual_magnitude = RewTerm(func=mdp.action_magnitude_l2, weight=-0.02) # -0.01
     #TODO Feet Force Value?
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5e-8)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
     # Joint Deviations
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.1,
+        weight=-0.2, # -0.1
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",

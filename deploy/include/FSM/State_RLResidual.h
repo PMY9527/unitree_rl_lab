@@ -38,21 +38,21 @@ public:
 
             while (policy_thread_running)
             {
-                // 1. Policy step: robot update, obs compute (last_action from prev combined), policy act
+                // Policy step: robot update, obs compute (last_action from prev combined), policy act
                 env->step();
 
-                // 2. CMG: autoregressive forward
+                // CMG: AR/Non-AR forward
                 auto& jp = env->robot->data.joint_pos;
                 auto& jv = env->robot->data.joint_vel;
                 auto cmd = isaaclab::observations_map()["keyboard_velocity_commands"](env.get(), {});
-                cmg->forward_ar(
+                cmg->forward(
                     {jp.data(), jp.data() + jp.size()},
                     {jv.data(), jv.data() + jv.size()},
                     {cmd.data(), cmd.data() + cmd.size()}
                 );
                 auto qr = cmg->get_qref();
 
-                // 3. Combine: qref + raw_residual
+                // qref + raw_residual
                 auto raw_residual = env->action_manager->action();
                 std::vector<float> combined(raw_residual.size());
                 for (size_t i = 0; i < combined.size(); ++i)
