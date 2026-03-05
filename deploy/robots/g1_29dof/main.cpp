@@ -49,8 +49,9 @@ int main(int argc, char** argv)
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
     fsm->start();
 
+    std::cout << "For PlayStation Joysticks:.\n";
     std::cout << "Press [L2 + Up] to enter FixStand mode.\n";
-    std::cout << "And then press [R1 + X] to start controlling the robot.\n";
+    std::cout << "And then press [R1 + Triangle] to start controlling the robot.\n";
 
     while (true)
     {
