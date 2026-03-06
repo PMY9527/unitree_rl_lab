@@ -44,8 +44,8 @@ public:
                 // CMG: AR/Non-AR forward
                 auto& jp = env->robot->data.joint_pos;
                 auto& jv = env->robot->data.joint_vel;
-                auto cmd = isaaclab::observations_map()["keyboard_velocity_commands"](env.get(), {});
-                cmg->forward(
+                auto cmd = isaaclab::observations_map()["keyboard_velocity_commands"](env.get(), {}); // velocity_commands if using joystick
+                cmg->forward( // forward_ar if using autoregressive cmg
                     {jp.data(), jp.data() + jp.size()},
                     {jv.data(), jv.data() + jv.size()},
                     {cmd.data(), cmd.data() + cmd.size()}

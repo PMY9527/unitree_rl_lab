@@ -274,7 +274,7 @@ def joint_pos_from_cmg_l2_gated(
     # exp(-0.6 * ||q - q_ref||^2)
     if gated:   
         cmd_vx = env.command_manager.get_command(command_name)[:, 0] # Commanded vx
-        cmg_weight = torch.clamp((cmd_vx - 1.2) / 0.2, 0.0, 1.0) # Below 1.1 -> 0, 1.1 - 1.3 ramps up, 1.3 or above -> 1
+        cmg_weight = torch.clamp((cmd_vx - 1.2) / 0.1, 0.0, 1.0) # Below 1.2 -> 0, 1.2 - 1.3 ramps up, 1.3 or above -> 1
         reward = cmg_weight * torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
     else:
         reward = torch.exp(-0.6 * torch.sum(torch.square(asset.data.joint_pos[:, asset_cfg.joint_ids] - q_ref), dim=1))
@@ -294,7 +294,7 @@ def joint_vel_from_cmg_l2_gated(
     # exp(-0.5 * ||qd - qd_ref||^2)
     if gated:    
         cmd_vx = env.command_manager.get_command(command_name)[:, 0] # Commanded vx
-        cmg_weight = torch.clamp((cmd_vx - 1.2) / 0.2, 0.0, 1.0) # Below 1.1 -> 0, 1.1 - 1.3 ramps up, 1.3 or above -> 1
+        cmg_weight = torch.clamp((cmd_vx - 1.2) / 0.1, 0.0, 1.0) # Below 1.2 -> 0, 1.2 - 1.3 ramps up, 1.3 or above -> 1
         reward = cmg_weight * torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
     else:
         reward = torch.exp(-0.5 * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids] - qd_ref), dim=1))
@@ -303,7 +303,7 @@ def joint_vel_from_cmg_l2_gated(
 def _walk_weight(env, command_name: str) -> torch.Tensor:
     """Compute walk weight: 1.0 when cmd_vx < 1.2, ramps to 0.0 at cmd_vx >= 1.3 (inverse of CMG gating)."""
     cmd_vx = env.command_manager.get_command(command_name)[:, 0]
-    return torch.clamp(1.0 - (cmd_vx - 1.2) / 0.2, 0.0, 1.0)
+    return torch.clamp(1.0 - (cmd_vx - 1.2) / 0.1, 0.0, 1.0)
 
 
 def feet_gait_gated(

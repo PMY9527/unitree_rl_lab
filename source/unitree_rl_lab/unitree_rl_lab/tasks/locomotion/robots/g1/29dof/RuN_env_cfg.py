@@ -185,9 +185,9 @@ class CommandsCfg:
             ang_vel_z=(-0.1, 0.1)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 3.0),
+            lin_vel_x=(-0.5, 3.5),
             lin_vel_y=(-0.3, 0.3),
-            ang_vel_z=(-1.0, 1.0)
+            ang_vel_z=(-0.5, 0.5)
         ),
     )
 
@@ -197,7 +197,7 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=False
+        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=False
     )
 
 
