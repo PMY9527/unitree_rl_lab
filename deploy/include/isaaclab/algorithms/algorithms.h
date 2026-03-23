@@ -209,6 +209,8 @@ public:
         motion_std = stats["motion_std"].as<std::vector<float>>();
         cmd_min = stats["command_min"].as<std::vector<float>>();
         cmd_max = stats["command_max"].as<std::vector<float>>();
+        cmd_mean = stats["command_mean"].as<std::vector<float>>();
+        cmd_std = stats["command_std"].as<std::vector<float>>();
 
         motion_dim = motion_mean.size();  // 58
         cmd_dim = cmd_min.size();         // 3
@@ -316,13 +318,17 @@ public:
             motion_norm[i] = (clamped - motion_mean[i]) / motion_std[i];
         }
 
+        // for (size_t i = 0; i < cmd_dim; ++i) {
+        //     float range = cmd_max[i] - cmd_min[i];
+        //     if (range > 1e-6f) {
+        //         cmd_norm[i] = (command[i] - cmd_min[i]) / range * 2.0f - 1.0f;
+        //     } else {
+        //         cmd_norm[i] = 0.0f;
+        //     }
+        // } // MIN MAX NORM FOR OLD CMG
+
         for (size_t i = 0; i < cmd_dim; ++i) {
-            float range = cmd_max[i] - cmd_min[i];
-            if (range > 1e-6f) {
-                cmd_norm[i] = (command[i] - cmd_min[i]) / range * 2.0f - 1.0f;
-            } else {
-                cmd_norm[i] = 0.0f;
-            }
+            cmd_norm[i] = command[i] - cmd_mean[i] / cmd_std[i]; // ZSCORE NORM FOR NEW CMG
         }
 
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
@@ -345,7 +351,15 @@ public:
             motion_ref_cmg[i] = output_data[i] * motion_std[i] + motion_mean[i];
         }
 
-        prev_output_cmg = motion_ref_cmg;
+        // Leaky AR: blend CMG output with actual state to prevent
+        // the AR chain from getting trapped at clamp fixed points
+        // during sharp velocity command transitions.
+        constexpr float ar_leak = 0.05f;
+        auto actual_cmg = usd_to_cmg(joint_pos_usd, joint_vel_usd);
+        for (size_t i = 0; i < motion_dim; ++i) {
+            prev_output_cmg[i] = (1.0f - ar_leak) * motion_ref_cmg[i]
+                                 + ar_leak * actual_cmg[i];
+        }
 
         auto motion_ref_usd = cmg_to_usd(motion_ref_cmg);
 
@@ -392,7 +406,7 @@ private:
 
     // Normalization stats
     std::vector<float> motion_mean, motion_std;
-    std::vector<float> cmd_min, cmd_max;
+    std::vector<float> cmd_min, cmd_max, cmd_mean, cmd_std;
     size_t motion_dim = 58;
     size_t cmd_dim = 3;
 

@@ -205,7 +205,10 @@ def main():
                 print(f"  [RAW] gravity_b: {gv}")
 
             # agent stepping (pass prev dones so AR CMG resets for terminated envs)
-            actions = policy(obs, robot_data=robot_data, dones=prev_dones)
+            try:
+                actions = policy(obs, robot_data=robot_data, dones=prev_dones)
+            except TypeError:
+                actions = policy(obs)
             # env stepping
             obs_tensor, _, dones, extras = env.step(actions)
             prev_dones = dones

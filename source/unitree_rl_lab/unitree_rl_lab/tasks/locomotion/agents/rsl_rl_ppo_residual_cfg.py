@@ -17,7 +17,7 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = ""  # same as task name
     empirical_normalization = True
     policy = RslRlPpoActorCriticRecurrentCfg(
-        init_noise_std=0.5,
+        init_noise_std=1.0,
         actor_hidden_dims=[256],
         critic_hidden_dims=[256],
         activation="elu",
@@ -29,10 +29,10 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.005, # 0.005->0.001->0.0
+        entropy_coef=0.005, # 0.005
         num_learning_epochs=5,
         num_mini_batches=4,
-        learning_rate=1.0e-3,
+        learning_rate=3.0e-4, # 1.0e-3
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,

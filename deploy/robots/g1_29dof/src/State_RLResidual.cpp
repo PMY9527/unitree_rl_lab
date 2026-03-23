@@ -14,8 +14,12 @@ State_RLResidual::State_RLResidual(int state_mode, std::string state_string)
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
-    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy_non_ar_new.onnx");
-    cmg = std::make_unique<isaaclab::CMGRunner>(cmg_dir / "exported" / "cmg_exported.onnx", cmg_dir / "stats" / "cmg_stats.yaml");
+    auto policy_path = policy_dir / "exported" / "policy_new_cmg_base.onnx";
+    auto cmg_path = cmg_dir / "exported" / "cmg_exported_new.onnx";
+    printf("[RLResidual] policy: %s\n", policy_path.filename().c_str());
+    printf("[RLResidual] cmg:    %s\n", cmg_path.filename().c_str());
+    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_path);
+    cmg = std::make_unique<isaaclab::CMGRunner>(cmg_path, cmg_dir / "stats" / "cmg_stats_new.yaml");
 
     this->registered_checks.emplace_back(
         std::make_pair(
@@ -32,3 +36,8 @@ void State_RLResidual::run()
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
 }
+
+// 2026-03-23_00-26-09 -> policy_new_cmg_base -> new CMG
+// policy_non_ar_new -> old CMG
+// forward_ar() <-> forward() @State_RLResidual.h ar/non-ar
+// min-max      <-> z-score   @State_RLResidual.h old/new CMG

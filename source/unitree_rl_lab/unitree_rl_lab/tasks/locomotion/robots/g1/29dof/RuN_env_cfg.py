@@ -180,12 +180,12 @@ class CommandsCfg:
         heading_command=False,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 1.3), #TODO set to (-0.1, 0.1) for better low speed?
+            lin_vel_x=(-0.1, 0.5), #TODO set to (-0.1, 0.1) for better low speed?
             lin_vel_y=(-0.1, 0.1),
             ang_vel_z=(-0.1, 0.1)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 3.5),
+            lin_vel_x=(-0.5, 3.0),
             lin_vel_y=(-0.3, 0.3),
             ang_vel_z=(-0.5, 0.5)
         ),
@@ -197,7 +197,7 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=False
+        asset_name="robot", joint_names=[".*"], scale=0.5, use_default_offset=False
     )
 
 
@@ -263,12 +263,12 @@ class RewardsCfg:
         func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=2.0, params={"command_name": "base_velocity"},
     )
     track_ang_vel_z = RewTerm(
-        func=mdp.track_ang_vel_z_world_exp, weight=0.5, params={"command_name": "base_velocity"}
+        func=mdp.track_ang_vel_z_world_exp, weight=1.0, params={"command_name": "base_velocity"}
     )
 
     #Imitation Rewards
-    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.0, params={"command_name": "base_velocity", "gated":True})
-    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.2, params={"command_name": "base_velocity", "gated":True})
+    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.5, params={"command_name": "base_velocity", "gated":True})
+    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.3, params={"command_name": "base_velocity", "gated":True})
 
     # Regularization
     alive = RewTerm(func=mdp.is_alive, weight=1.0)
@@ -285,7 +285,7 @@ class RewardsCfg:
     # Joint Deviations
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.2, # -0.1
+        weight=-0.1,
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -322,8 +322,14 @@ class RewardsCfg:
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
         },
     )
-    
-    # Low-speed gated rewards (from velocity_env_cfg, active when vx < 1.3)
+
+    # Stand still (for latest AR)
+    standing_still = RewTerm(
+        func=mdp.stand_still,
+        weight=-0.5
+    )
+
+    # Low-speed gated rewards
     base_linear_velocity_walk = RewTerm(
         func=mdp.lin_vel_z_l2_gated, weight=-2.0,
         params={"command_name": "base_velocity"},
@@ -351,7 +357,7 @@ class RewardsCfg:
             "command_name": "base_velocity",
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.1,
+            "target_height": 0.15,
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
         },
     )
@@ -414,12 +420,12 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
 class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 48
+        self.scene.num_envs = 1
         self.scene.env_spacing = 2.0
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 2
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 3.5),
+            lin_vel_x=(0.0, 0.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0)
         )
