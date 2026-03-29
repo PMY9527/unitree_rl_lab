@@ -63,8 +63,8 @@ public:
                 std::vector<float> combined(raw_residual.size());
                 for (size_t i = 0; i < combined.size(); ++i)
                     combined[i] = qr[i] + raw_residual[i];
-                combined[25] = 0.0f;  // zero wrist pitch
-                combined[26] = 0.0f;
+                // combined[25] = 0.0f;  // zero wrist pitch
+                // combined[26] = 0.0f;
 
                 env->action_manager->process_action(combined);
 

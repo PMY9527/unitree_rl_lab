@@ -1,6 +1,7 @@
 import math
 
 import isaaclab.sim as sim_utils
+from isaaclab.actuators import DelayedPDActuatorCfg
 import isaaclab.terrains as terrain_gen
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -267,20 +268,21 @@ class RewardsCfg:
     )
 
     #Imitation Rewards
-    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.5, params={"command_name": "base_velocity", "gated":True})
-    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.3, params={"command_name": "base_velocity", "gated":True})
+    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.0, params={"command_name": "base_velocity", "gated":True})
+    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.2, params={"command_name": "base_velocity", "gated":True})
 
     # Regularization
     alive = RewTerm(func=mdp.is_alive, weight=1.0)
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    energy = RewTerm(func=mdp.energy, weight=-1e-5)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.04)
-    action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.06)
-    residual_magnitude = RewTerm(func=mdp.action_magnitude_l2, weight=-0.02) # -0.01
+    energy = RewTerm(func=mdp.energy, weight=-2e-5)
+    action_rate = RewTerm(func=mdp.residual_rate_l2, weight=-0.05)
+    action_smoothness = RewTerm(func=mdp.residual_smoothness_l2, weight=-0.06)
+    residual_magnitude = RewTerm(func=mdp.action_magnitude_l2, weight=-0.02)
     #TODO Feet Force Value?
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5e-8)
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
     # Joint Deviations
     joint_deviation_arms = RewTerm(
@@ -311,12 +313,12 @@ class RewardsCfg:
     )
     joint_deviation_legs = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.2,
+        weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"])},
     )
     feet_slide = RewTerm(
         func=mdp.feet_slide,
-        weight=-1.0,
+        weight=-0.2,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
@@ -334,10 +336,7 @@ class RewardsCfg:
         func=mdp.lin_vel_z_l2_gated, weight=-2.0,
         params={"command_name": "base_velocity"},
     )
-    joint_vel_walk = RewTerm(
-        func=mdp.joint_vel_l2_gated, weight=-0.001,
-        params={"command_name": "base_velocity"},
-    )
+
     gait_walk = RewTerm(
         func=mdp.feet_gait_gated,
         weight=0.5,
@@ -415,17 +414,66 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
 
         self.scene.contact_forces.update_period = self.sim.dt
 
+        # Action delay randomization for sim-to-real robustness
+        MIN_DELAY, MAX_DELAY = 0, 4  # physics steps (0-4 decimation * dt 0.005s = 0-20ms)
+        self.scene.robot.actuators["N7520-14.3"] = DelayedPDActuatorCfg(
+            joint_names_expr=[".*_hip_pitch_.*", ".*_hip_yaw_.*", "waist_yaw_joint"],
+            effort_limit_sim=88,
+            velocity_limit_sim=32.0,
+            stiffness={".*_hip_.*": 100.0, "waist_yaw_joint": 200.0},
+            damping={".*_hip_.*": 2.0, "waist_yaw_joint": 5.0},
+            armature=0.01,
+            min_delay=MIN_DELAY,
+            max_delay=MAX_DELAY,
+        )
+        self.scene.robot.actuators["N7520-22.5"] = DelayedPDActuatorCfg(
+            joint_names_expr=[".*_hip_roll_.*", ".*_knee_.*"],
+            effort_limit_sim=139,
+            velocity_limit_sim=20.0,
+            stiffness={".*_hip_roll_.*": 100.0, ".*_knee_.*": 150.0},
+            damping={".*_hip_roll_.*": 2.0, ".*_knee_.*": 4.0},
+            armature=0.01,
+            min_delay=MIN_DELAY,
+            max_delay=MAX_DELAY,
+        )
+        self.scene.robot.actuators["N5020-16"] = DelayedPDActuatorCfg(
+            joint_names_expr=[
+                ".*_shoulder_.*", ".*_elbow_.*", ".*_wrist_roll.*",
+                ".*_ankle_.*", "waist_roll_joint", "waist_pitch_joint",
+            ],
+            effort_limit_sim=25,
+            velocity_limit_sim=37,
+            stiffness=40.0,
+            damping={
+                ".*_shoulder_.*": 1.0, ".*_elbow_.*": 1.0, ".*_wrist_roll.*": 1.0,
+                ".*_ankle_.*": 2.0, "waist_.*_joint": 5.0,
+            },
+            armature=0.01,
+            min_delay=MIN_DELAY,
+            max_delay=MAX_DELAY,
+        )
+        self.scene.robot.actuators["W4010-25"] = DelayedPDActuatorCfg(
+            joint_names_expr=[".*_wrist_pitch.*", ".*_wrist_yaw.*"],
+            effort_limit_sim=5,
+            velocity_limit_sim=22,
+            stiffness=40.0,
+            damping=1.0,
+            armature=0.01,
+            min_delay=MIN_DELAY,
+            max_delay=MAX_DELAY,
+        )
+
 
 @configclass
 class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 1
+        self.scene.num_envs = 10
         self.scene.env_spacing = 2.0
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 2
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 0.0),
+            lin_vel_x=(0.0, 1.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(0.0, 0.0)
         )

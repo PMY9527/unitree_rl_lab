@@ -13,9 +13,9 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     obs_groups = {"policy": ["policy"], "critic": ["policy", "gt_linear_velocity", "motion"]} 
     max_iterations = 10000
-    save_interval = 500
+    save_interval = 200
     experiment_name = ""  # same as task name
-    empirical_normalization = True
+    empirical_normalization = False
     policy = RslRlPpoActorCriticRecurrentCfg(
         init_noise_std=1.0,
         actor_hidden_dims=[256],
@@ -29,10 +29,10 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.005, # 0.005
+        entropy_coef=0.01,
         num_learning_epochs=5,
         num_mini_batches=4,
-        learning_rate=3.0e-4, # 1.0e-3
+        learning_rate=1.0e-3, # 1.0e-3
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,

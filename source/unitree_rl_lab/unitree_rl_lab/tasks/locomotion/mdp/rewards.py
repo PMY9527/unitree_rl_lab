@@ -398,6 +398,15 @@ def joint_vel_l2_gated(
     return walk_gate(env, command_name) * torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
 
 
+def action_rate_l2_zero_cmd(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+) -> torch.Tensor:
+    """Penalize action rate when command is near zero (norm < 0.1)."""
+    cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+    return (cmd_norm < 0.1) * torch.sum(torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1)
+
+
 def track_lin_vel_xy_yaw_frame_exp(
     env, command_name: str, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -422,7 +431,7 @@ def track_ang_vel_z_world_exp(
     ang_vel_error = torch.square(
         env.command_manager.get_command(command_name)[:, 2] - asset.data.root_ang_vel_w[:, 2]
     )
-    return torch.exp(-1.5 * ang_vel_error)
+    return torch.exp(-0.5 * ang_vel_error)
 
 def is_terminated(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Return 1.0 for terminated episodes (excluding timeouts)."""
@@ -435,10 +444,60 @@ def action_magnitude_l2(env) -> torch.Tensor:
     return torch.sum(torch.square(env.action_manager.action), dim=1)
 
 
+def _get_residual(env) -> torch.Tensor:
+    """Extract residual from action by subtracting CMG reference.
+
+    action_manager.action = qref[:29] + residual, so residual = action - qref[:29].
+    Falls back to raw action if CMG motion is not available.
+    """
+    action = env.action_manager.action
+    cmg_motion = env.extras.get("cmg_motion")
+    if cmg_motion is None:
+        return action
+    return action - cmg_motion[:, :29]
+
+
+def residual_rate_l2(env) -> torch.Tensor:
+    """Penalize rate of change of the residual only (not CMG reference changes)."""
+    r_t = _get_residual(env)
+
+    if "_residual_rate_prev" not in env.extras:
+        env.extras["_residual_rate_prev"] = r_t.clone()
+        return torch.zeros(env.num_envs, device=env.device)
+
+    r_t1 = env.extras["_residual_rate_prev"]
+    env.extras["_residual_rate_prev"] = r_t.clone()
+
+    return torch.sum(torch.square(r_t - r_t1), dim=1)
+
+
+def residual_smoothness_l2(env) -> torch.Tensor:
+    """Penalize jerk of the residual only (second derivative).
+
+    Computes ||r_t - 2*r_{t-1} + r_{t-2}||^2
+    """
+    r_t = _get_residual(env)
+
+    if "_residual_smooth_prev" not in env.extras:
+        env.extras["_residual_smooth_prev"] = r_t.clone()
+        env.extras["_residual_smooth_prev_prev"] = r_t.clone()
+        return torch.zeros(env.num_envs, device=env.device)
+
+    r_t1 = env.extras["_residual_smooth_prev"]
+    r_t2 = env.extras["_residual_smooth_prev_prev"]
+
+    jerk = r_t - 2 * r_t1 + r_t2
+
+    env.extras["_residual_smooth_prev_prev"] = r_t1.clone()
+    env.extras["_residual_smooth_prev"] = r_t.clone()
+
+    return torch.sum(torch.square(jerk), dim=1)
+
+
 def action_smoothness_l2(env) -> torch.Tensor:
     """Penalize action jerk (second derivative) for smoother motion.
 
-    Computes ||a_t - 2*a_{t-1} + a_{t-2}||^2 
+    Computes ||a_t - 2*a_{t-1} + a_{t-2}||^2
     """
     a_t = env.action_manager.action
     a_t1 = env.action_manager.prev_action
