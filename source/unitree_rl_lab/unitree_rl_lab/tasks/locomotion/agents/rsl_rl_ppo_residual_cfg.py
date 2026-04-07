@@ -13,9 +13,9 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     obs_groups = {"policy": ["policy"], "critic": ["policy", "gt_linear_velocity", "motion"]} 
     max_iterations = 10000
-    save_interval = 200
-    experiment_name = ""  # same as task name
-    empirical_normalization = False
+    save_interval = 500
+    experiment_name = "A"  # same as task name
+    empirical_normalization = True
     policy = RslRlPpoActorCriticRecurrentCfg(
         init_noise_std=1.0,
         actor_hidden_dims=[256],

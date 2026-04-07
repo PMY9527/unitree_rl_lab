@@ -79,6 +79,7 @@ rsl_rl_ppo_residual_cfg_cp_lstm.py
 rsl_rl_ppo_residual_cfg_cp_mlp.py
 ONNX_FIX.md
 .claude
+docs/
 # policy_ar_scale_half.onnx
 # policy_ar_scale_one.onnx
 # policy_ar.onnx

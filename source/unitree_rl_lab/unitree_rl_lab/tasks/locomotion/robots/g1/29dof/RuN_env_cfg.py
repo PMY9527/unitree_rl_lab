@@ -165,7 +165,7 @@ class EventCfg: #TODO
         func=mdp.push_by_setting_velocity,
         mode="interval",
         interval_range_s=(5.0, 5.0),
-        params={"velocity_range": {"x": (-0.8, 0.8), "y": (-0.8, 0.8)}}, # increased from 0.5 
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.4, 0.4)}},
     )
 
 
@@ -176,19 +176,21 @@ class CommandsCfg:
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.02,
+        rel_standing_envs=0.05,
         rel_heading_envs=1.0,
-        heading_command=False,
+        heading_command=True,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.5), #TODO set to (-0.1, 0.1) for better low speed?
-            lin_vel_y=(-0.1, 0.1),
-            ang_vel_z=(-0.1, 0.1)
+            lin_vel_x=(0.5, 3.0),
+            lin_vel_y=(-0.3, 0.3),
+            ang_vel_z=(-1.0, 1.0),
+            heading=(-math.pi, math.pi),
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 3.0),
-            lin_vel_y=(-0.3, 0.3),
-            ang_vel_z=(-0.5, 0.5)
+            lin_vel_x=(0.5, 3.5),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(-1.0, 1.0),
+            heading=(-math.pi, math.pi),
         ),
     )
 
@@ -198,7 +200,7 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.5, use_default_offset=False
+        asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=False
     )
 
 
@@ -211,11 +213,11 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # O^t
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, noise=Unoise(n_min=-1.5, n_max=1.5))
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-1.5, n_max=1.5))
         last_action = ObsTerm(func=mdp.last_action)
         # gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": 0.8})
 
@@ -264,30 +266,50 @@ class RewardsCfg:
         func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=2.0, params={"command_name": "base_velocity"},
     )
     track_ang_vel_z = RewTerm(
-        func=mdp.track_ang_vel_z_world_exp, weight=1.0, params={"command_name": "base_velocity"}
+        func=mdp.track_ang_vel_z_world_exp, weight=1.5, params={"command_name": "base_velocity"}
+    )
+    track_ang_vel_z_l2 = RewTerm(
+        func=mdp.track_ang_vel_z_world_l2, weight=-1.0, params={"command_name": "base_velocity"}
     )
 
     #Imitation Rewards
-    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.0, params={"command_name": "base_velocity", "gated":True})
-    joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.2, params={"command_name": "base_velocity", "gated":True})
+    joint_pos_from_cmg = RewTerm(func=mdp.joint_pos_from_cmg_l2_gated, weight=1.2, params={"command_name": "base_velocity", "gated":False})
+    # joint_vel_from_cmg = RewTerm(func=mdp.joint_vel_from_cmg_l2_gated, weight=0.2, params={"command_name": "base_velocity", "gated":False})
 
     # Regularization
     alive = RewTerm(func=mdp.is_alive, weight=1.0)
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    energy = RewTerm(func=mdp.energy, weight=-2e-5)
-    action_rate = RewTerm(func=mdp.residual_rate_l2, weight=-0.05)
-    action_smoothness = RewTerm(func=mdp.residual_smoothness_l2, weight=-0.06)
+    lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
+    energy = RewTerm(func=mdp.energy, weight=-1e-5)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.04)
+    action_smoothness = RewTerm(func=mdp.action_smoothness_l2, weight=-0.06)
     residual_magnitude = RewTerm(func=mdp.action_magnitude_l2, weight=-0.02)
-    #TODO Feet Force Value?
-    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    # joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-5e-8)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
+
+    # Shoulder roll limit
+    shoulder_roll_limit = RewTerm(
+        func=mdp.joint_pos_abs_threshold,
+        weight=-1.0,
+        params={
+            "threshold": 0.30,
+            "asset_cfg": SceneEntityCfg(
+                "robot", 
+               joint_names=[
+                "left_shoulder_roll_joint", 
+                "right_shoulder_roll_joint",
+                "left_shoulder_yaw_joint",
+                "right_shoulder_yaw_joint"]),
+        },
+    )
+
     # Joint Deviations
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.1,
+        weight=-0.05, # arms too restricted.
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -301,7 +323,7 @@ class RewardsCfg:
     )
     joint_deviation_waists = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.5,
+        weight=-0.2,
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot",
@@ -313,9 +335,27 @@ class RewardsCfg:
     )
     joint_deviation_legs = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.1,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"])},
+        weight=-0.2,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint"])},
     )
+    
+    flat_foot_pitch = RewTerm(
+        func=mdp.flat_foot_contact,
+        weight=-0.3,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["left_ankle_pitch_joint", "right_ankle_pitch_joint"]),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+        },
+    )
+    flat_foot_roll = RewTerm(
+        func=mdp.flat_foot_contact,
+        weight=-0.1,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["left_ankle_roll_joint", "right_ankle_roll_joint"]),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+        },
+    )
+
     feet_slide = RewTerm(
         func=mdp.feet_slide,
         weight=-0.2,
@@ -331,49 +371,36 @@ class RewardsCfg:
         weight=-0.5
     )
 
-    # Low-speed gated rewards
-    base_linear_velocity_walk = RewTerm(
-        func=mdp.lin_vel_z_l2_gated, weight=-2.0,
-        params={"command_name": "base_velocity"},
-    )
-
-    gait_walk = RewTerm(
-        func=mdp.feet_gait_gated,
-        weight=0.5,
+    knees_too_near = RewTerm(
+        func=mdp.feet_too_near,
+        weight=-0.5,
         params={
-            "period": 0.8,
-            "offset": [0.0, 0.5],
-            "threshold": 0.55,
-            "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-        },
-    )
-    
-    feet_clearance_walk = RewTerm(
-        func=mdp.feet_clearance_gated,
-        weight=1.0,
-        params={
-            "command_name": "base_velocity",
-            "std": 0.05,
-            "tanh_mult": 2.0,
-            "target_height": 0.15,
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+            "threshold": 0.2,
+            "asset_cfg": SceneEntityCfg("robot", body_names=["left_knee_link", "right_knee_link"]),
         },
     )
 
-    base_height_walk = RewTerm(
-        func=mdp.base_height_gated,
-        weight=-10.0,
-        params={"command_name": "base_velocity", "target_height": 0.78},
-    )
-
-    undesired_contacts_walk = RewTerm(
-        func=mdp.undesired_contacts_gated,
-        weight=-1.0,
+    undesired_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-1,
         params={
-            "command_name": "base_velocity",
             "threshold": 1,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["(?!.*ankle.*).*"]),
+        },
+    )
+
+    gait = RewTerm(
+        func=mdp.feet_gait_adaptive,
+        weight=0.5,
+        params={
+            "period_low": 1.0,
+            "period_high": 0.6,
+            "speed_low": 0.5,
+            "speed_high": 2.5,
+            "offset": [0.0, 0.5],
+            "threshold": 0.60,
+            "command_name": "base_velocity",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
         },
     )
 
@@ -389,7 +416,7 @@ class TerminationsCfg:
 @configclass
 class CurriculumCfg:
     """Curriculum terms for the MDP."""
-    lin_vel_cmd_levels = CurrTerm(mdp.lin_vel_cmd_levels)
+    ang_vel_cmd_levels = CurrTerm(mdp.ang_vel_cmd_levels)
 
 @configclass
 class RuNEnvCfg(ManagerBasedRLEnvCfg):
@@ -401,7 +428,7 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    curriculum: CurriculumCfg = CurriculumCfg()
+    curriculum: CurriculumCfg = None
 
     def __post_init__(self):
         """Post initialization."""
@@ -414,66 +441,19 @@ class RuNEnvCfg(ManagerBasedRLEnvCfg):
 
         self.scene.contact_forces.update_period = self.sim.dt
 
-        # Action delay randomization for sim-to-real robustness
-        MIN_DELAY, MAX_DELAY = 0, 4  # physics steps (0-4 decimation * dt 0.005s = 0-20ms)
-        self.scene.robot.actuators["N7520-14.3"] = DelayedPDActuatorCfg(
-            joint_names_expr=[".*_hip_pitch_.*", ".*_hip_yaw_.*", "waist_yaw_joint"],
-            effort_limit_sim=88,
-            velocity_limit_sim=32.0,
-            stiffness={".*_hip_.*": 100.0, "waist_yaw_joint": 200.0},
-            damping={".*_hip_.*": 2.0, "waist_yaw_joint": 5.0},
-            armature=0.01,
-            min_delay=MIN_DELAY,
-            max_delay=MAX_DELAY,
-        )
-        self.scene.robot.actuators["N7520-22.5"] = DelayedPDActuatorCfg(
-            joint_names_expr=[".*_hip_roll_.*", ".*_knee_.*"],
-            effort_limit_sim=139,
-            velocity_limit_sim=20.0,
-            stiffness={".*_hip_roll_.*": 100.0, ".*_knee_.*": 150.0},
-            damping={".*_hip_roll_.*": 2.0, ".*_knee_.*": 4.0},
-            armature=0.01,
-            min_delay=MIN_DELAY,
-            max_delay=MAX_DELAY,
-        )
-        self.scene.robot.actuators["N5020-16"] = DelayedPDActuatorCfg(
-            joint_names_expr=[
-                ".*_shoulder_.*", ".*_elbow_.*", ".*_wrist_roll.*",
-                ".*_ankle_.*", "waist_roll_joint", "waist_pitch_joint",
-            ],
-            effort_limit_sim=25,
-            velocity_limit_sim=37,
-            stiffness=40.0,
-            damping={
-                ".*_shoulder_.*": 1.0, ".*_elbow_.*": 1.0, ".*_wrist_roll.*": 1.0,
-                ".*_ankle_.*": 2.0, "waist_.*_joint": 5.0,
-            },
-            armature=0.01,
-            min_delay=MIN_DELAY,
-            max_delay=MAX_DELAY,
-        )
-        self.scene.robot.actuators["W4010-25"] = DelayedPDActuatorCfg(
-            joint_names_expr=[".*_wrist_pitch.*", ".*_wrist_yaw.*"],
-            effort_limit_sim=5,
-            velocity_limit_sim=22,
-            stiffness=40.0,
-            damping=1.0,
-            armature=0.01,
-            min_delay=MIN_DELAY,
-            max_delay=MAX_DELAY,
-        )
 
 
 @configclass
 class RuNPlayEnvCfg(RuNEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 10
+        self.scene.num_envs = 32
         self.scene.env_spacing = 2.0
         self.scene.terrain.terrain_generator.num_rows = 2
         self.scene.terrain.terrain_generator.num_cols = 2
         self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 1.0),
+            lin_vel_x=(0.0, 3.0),
             lin_vel_y=(0.0, 0.0),
-            ang_vel_z=(0.0, 0.0)
+            ang_vel_z=(0.5, 0.5),
+            heading=(-math.pi, math.pi),
         )
